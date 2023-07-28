@@ -189,6 +189,7 @@ public:
                                                  const SimulatorTimerInterface& timer,
                                                  NonlinearSolverType& nonlinear_solver)
     {
+        OPM_TIMEBLOCK(nonlinearIterationNldd);
         // -----------   Set up reports and timer   -----------
         SimulatorReportSingle report;
         Dune::Timer perfTimer;
@@ -361,7 +362,7 @@ private:
                 [[maybe_unused]] const int global_iteration,
                 const bool initial_assembly_required)
     {
-        auto& modelSimulator = model_.simulator();
+        auto& ebosSimulator = model_.ebosSimulator();
 
         SimulatorReportSingle report;
         Dune::Timer solveTimer;
@@ -412,6 +413,7 @@ private:
         const int max_iter = model_.param().max_local_solve_iterations_;
         const auto& grid = modelSimulator.vanguard().grid();
         do {
+            OPM_TIMEBLOCK(nonlinearIterationForOneDomain);
             // Solve local linear system.
             // Note that x has full size, we expect it to be nonzero only for in-domain cells.
             const int nc = grid.size(0);
@@ -474,6 +476,7 @@ private:
     /// Assemble the residual and Jacobian of the nonlinear system.
     SimulatorReportSingle assembleReservoirDomain(const Domain& domain)
     {
+        OPM_TIMEBLOCK(assembleReservoirDomain);
         // -------- Mass balance equations --------
         model_.simulator().model().linearizer().linearizeDomain(domain);
         return model_.wellModel().lastReport();
@@ -482,6 +485,7 @@ private:
     //! \brief Solve the linearized system for a domain.
     void solveJacobianSystemDomain(const Domain& domain, BVector& global_x)
     {
+        OPM_TIMEBLOCK(solveJacobianSystemDomain);
         const auto& modelSimulator = model_.simulator();
 
         Dune::Timer perfTimer;
@@ -515,6 +519,7 @@ private:
     /// Apply an update to the primary variables.
     void updateDomainSolution(const Domain& domain, const BVector& dx)
     {
+        OPM_TIMEBLOCK(updateDomainSolution);
         auto& simulator = model_.simulator();
         auto& newtonMethod = simulator.model().newtonMethod();
         SolutionVector& solution = simulator.model().solution(/*timeIdx=*/0);
@@ -705,6 +710,7 @@ private:
                                            DeferredLogger& logger,
                                            std::vector<double>& residual_norms)
     {
+        OPM_TIMEBLOCK(getDomainConvergence);
         std::vector<Scalar> B_avg(numEq, 0.0);
         auto report = this->getDomainReservoirConvergence(timer.simulationTimeElapsed(),
                                                           timer.currentStepLength(),
@@ -792,6 +798,7 @@ private:
                            const SimulatorTimerInterface& timer,
                            const Domain& domain)
     {
+        OPM_TIMEBLOCK(solveDomainJacobi);
         auto initial_local_well_primary_vars = model_.wellModel().getPrimaryVarsDomain(domain);
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
         auto res = solveDomain(domain, timer, logger, iteration, false);
@@ -817,6 +824,7 @@ private:
                                 const SimulatorTimerInterface& timer,
                                 const Domain& domain)
     {
+        OPM_TIMEBLOCK(solveDomainGaussSeidel);
         auto initial_local_well_primary_vars = model_.wellModel().getPrimaryVarsDomain(domain);
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
         auto res = solveDomain(domain, timer, logger, iteration, true);

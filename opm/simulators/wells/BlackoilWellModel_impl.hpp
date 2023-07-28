@@ -1245,6 +1245,7 @@ namespace Opm {
                    const double dt,
                    const Domain& domain)
     {
+        OPM_TIMEBLOCK(WellAssembleDomain)
         last_report_ = SimulatorReportSingle();
         Dune::Timer perfTimer;
         perfTimer.start();
@@ -1485,6 +1486,7 @@ namespace Opm {
     BlackoilWellModel<TypeTag>::
     assembleWellEq(const double dt, DeferredLogger& deferred_logger)
     {
+        OPM_TIMEBLOCK(assembleWellEq);
         for (auto& well : well_container_) {
             well->assembleWellEq(simulator_, dt, this->wellState(), this->groupState(), deferred_logger);
         }
@@ -1496,6 +1498,7 @@ namespace Opm {
     BlackoilWellModel<TypeTag>::
     assembleWellEqDomain(const double dt, const Domain& domain, DeferredLogger& deferred_logger)
     {
+        OPM_TIMEBLOCK(assembleWellEqDomain);
         for (auto& well : well_container_) {
             if (well_domain_.at(well->name()) == domain.index) {
                 well->assembleWellEq(simulator_, dt, this->wellState(), this->groupState(), deferred_logger);

@@ -421,7 +421,7 @@ namespace Opm {
                                                        const SimulatorTimerInterface& timer,
                                                        NonlinearSolverType& nonlinear_solver)
         {
-
+            OPM_TIMEBLOCK(nonlinearIterationNewton);
             // -----------   Set up reports and timer   -----------
             SimulatorReportSingle report;
             Dune::Timer perfTimer;
