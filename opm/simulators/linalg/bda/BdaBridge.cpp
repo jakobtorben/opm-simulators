@@ -215,11 +215,11 @@ void BdaBridge<BridgeMatrix, BridgeVector, block_size>::solve_system(BridgeMatri
         const int Nb = bridgeMat->N();
         const int nnzb = bridgeMat->nonzeroes();
 
-        if (dim != 3) {
-            OpmLog::warning("BdaSolver only accepts blocksize = 3 at this time, will use Dune for the remainder of the program");
-            use_gpu = false;
-            return;
-        }
+        //if (dim != 3) {
+        //    OpmLog::warning("BdaSolver only accepts blocksize = 3 at this time, will use Dune for the remainder of the program");
+        //    use_gpu = false;
+        //    return;
+        //}
 
         if (!matrix) {
             h_rows.reserve(Nb+1);

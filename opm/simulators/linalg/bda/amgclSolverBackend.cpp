@@ -89,7 +89,7 @@ void amgclSolverBackend<block_size>::initialize(int Nb_, int nnzbs) {
     x.resize(N);
 
     // try to read amgcl parameters via json file
-    std::string filename = "amgcl_options.json";
+    std::string filename = "/home/jakob/code/opm/opm-simulators/amgcl_options.json";
     std::ifstream file(filename);
     std::string backend_type_string;
 

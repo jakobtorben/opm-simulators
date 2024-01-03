@@ -121,13 +121,20 @@ apply(Vector& rhs,
             bridge_->get_result(x);
             return true;
         } else {
+            result.converged = false;
+            result.iterations = 200;
+            
             // warn about CPU fallback
             // BdaBridge might have disabled its BdaSolver for this simulation due to some error
             // in that case the BdaBridge is disabled and flexibleSolver is always used
             // or maybe the BdaSolver did not converge in time, then it will be used next linear solve
             if (rank == 0) {
-                OpmLog::warning(bridge_->getAccleratorName() + " did not converge, now trying Dune to solve current linear system...");
+                OpmLog::warning(bridge_->getAccleratorName() + " did not converge");
             }
+            const std::string msg("Convergence failure for linear solver.");
+            // throw numerical issue, such that the timestep is chopped rather than defaulting back to the Dune solver
+            OPM_THROW_NOLOG(NumericalProblem, msg);
+            return false;
         }
     }
 

@@ -255,12 +255,14 @@ public:
                               const_cast<Matrix&>(this->getMatrix()),
                               x, result))
         {
-            if(bdaBridge_->gpuActive()){
+            /*if(bdaBridge_->gpuActive()){
                 // bda solve fails use istl solver setup need to be done since it is not setup in prepare
                 ParentType::prepareFlexibleSolver();
             }
             assert(this->flexibleSolver_[this->activeSolverNum_].solver_);
             this->flexibleSolver_[this->activeSolverNum_].solver_->apply(x, *(this->rhs_), result);
+            */
+            return false;
         }
 
         // Check convergence, iterations etc.
