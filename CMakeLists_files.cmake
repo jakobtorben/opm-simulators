@@ -513,6 +513,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/linalg/FlexibleSolver_impl.hpp
   opm/simulators/linalg/FlowLinearSolverParameters.hpp
   opm/simulators/linalg/GraphColoring.hpp
+  opm/simulators/linalg/ImprovedBicgstab.hpp
   opm/simulators/linalg/ISTLSolver.hpp
   opm/simulators/linalg/ISTLSolverBda.hpp
   opm/simulators/linalg/MatrixMarketSpecializations.hpp

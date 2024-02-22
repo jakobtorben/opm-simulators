@@ -25,6 +25,7 @@
 #include <opm/common/TimingMacros.hpp>
 #include <opm/simulators/linalg/matrixblock.hh>
 #include <opm/simulators/linalg/ilufirstelement.hh>
+#include <opm/simulators/linalg/ImprovedBicgstab.hpp>
 #include <opm/simulators/linalg/FlexibleSolver.hpp>
 #include <opm/simulators/linalg/PreconditionerFactory.hpp>
 #include <opm/simulators/linalg/PropertyTree.hpp>
@@ -164,6 +165,13 @@ namespace Dune
                                                                             tol, // desired residual reduction factor
                                                                             maxiter, // maximum number of iterations
                                                                             verbosity);
+        } else if (solver_type == "improved_bicgstab") {
+            linsolver_ = std::make_shared<Dune::ImprovedBiCGSTABSolver<VectorType>>(*linearoperator_for_solver_,
+                                                                            *scalarproduct_,
+                                                                            *preconditioner_,
+                                                                            tol, // desired residual reduction factor
+                                                                            maxiter, // maximum number of iterations
+                                                                            verbosity);
         } else if (solver_type == "loopsolver") {
             linsolver_ = std::make_shared<Dune::LoopSolver<VectorType>>(*linearoperator_for_solver_,
                                                                         *scalarproduct_,
@@ -196,8 +204,16 @@ namespace Dune
             direct_solver_ = true;
 #endif
 #if HAVE_CUDA
-        } else if (solver_type == "cubicgstab") {
+        /*} else if (solver_type == "cubicgstab") {
             linsolver_.reset(new Opm::cuistl::SolverAdapter<Operator, Dune::BiCGSTABSolver, VectorType>(
+                *linearoperator_for_solver_,
+                *scalarproduct_,
+                preconditioner_,
+                tol, // desired residual reduction factor
+                maxiter, // maximum number of iterations
+                verbosity));*/
+        } else if (solver_type == "improved_cubicgstab") {
+            linsolver_.reset(new Opm::cuistl::SolverAdapter<Operator, Dune::ImprovedBiCGSTABSolver, VectorType>(
                 *linearoperator_for_solver_,
                 *scalarproduct_,
                 preconditioner_,
