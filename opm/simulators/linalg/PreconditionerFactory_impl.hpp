@@ -262,7 +262,7 @@ struct StandardPreconditioners
           });
         }
 
-#if HAVE_CUDA
+/*#if HAVE_CUDA
         F::addCreator("CUILU0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t, const C& comm) {
             const double w = prm.get<double>("relaxation", 1.0);
             using field_type = typename V::field_type;
@@ -294,9 +294,8 @@ struct StandardPreconditioners
             auto wrapped = std::make_shared<Opm::cuistl::CuBlockPreconditioner<V, V, Comm>>(adapted, comm);
             return wrapped;
         });
-#endif
+#endif*/
     }
-
 
     static typename PreconditionerFactory<Operator,Comm>::PrecPtr
     createParILU(const Operator& op, const PropertyTree& prm, const Comm& comm, const int ilulevel)
@@ -486,6 +485,7 @@ struct StandardPreconditioners<Operator,Dune::Amg::SequentialInformation>
         });
 
 #if HAVE_CUDA
+        /*
         F::addCreator("CUILU0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
             const double w = prm.get<double>("relaxation", 1.0);
             using field_type = typename V::field_type;
@@ -514,14 +514,16 @@ struct StandardPreconditioners<Operator,Dune::Amg::SequentialInformation>
             using CUJac = typename Opm::cuistl::CuJac<M, Opm::cuistl::CuVector<field_type>, Opm::cuistl::CuVector<field_type>>;
             return std::make_shared<Opm::cuistl::PreconditionerAdapter<V, V, CUJac>>(std::make_shared<CUJac>(op.getmat(), w));
         });
-
+        */
         F::addCreator("CUDILU", [](const O& op, [[maybe_unused]] const P& prm, const std::function<V()>&, std::size_t) {
             using field_type = typename V::field_type;
             using CUDILU = typename Opm::cuistl::CuDILU<M, Opm::cuistl::CuVector<field_type>, Opm::cuistl::CuVector<field_type>>;
-            return std::make_shared<Opm::cuistl::PreconditionerAdapter<V, V, CUDILU>>(std::make_shared<CUDILU>(op.getmat()));
+            Opm::cuistl::CuSparseMatrix<field_type> gpuMatrix = Opm::cuistl::CuSparseMatrix<field_type>::fromMatrix(op.getmat());
+            return std::make_shared<Opm::cuistl::PreconditionerAdapter<V, V, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), gpuMatrix));
         });
-
+        /*
         F::addCreator("CUDILUFloat", [](const O& op, [[maybe_unused]] const P& prm, const std::function<V()>&, std::size_t) {
+            using field_type = typename V::field_type;
             using block_type = typename V::block_type;
             using VTo = Dune::BlockVector<Dune::FieldVector<float, block_type::dimension>>;
             using matrix_type_to = typename Dune::BCRSMatrix<Dune::FieldMatrix<float, block_type::dimension, block_type::dimension>>;
@@ -529,10 +531,11 @@ struct StandardPreconditioners<Operator,Dune::Amg::SequentialInformation>
             using Adapter = typename Opm::cuistl::PreconditionerAdapter<VTo, VTo, CuDILU>;
             using Converter = typename Opm::cuistl::PreconditionerConvertFieldTypeAdapter<Adapter, M, V, V>;
             auto converted = std::make_shared<Converter>(op.getmat());
+            //Opm::cuistl::CuSparseMatrix<field_type> gpuMatrix;
             auto adapted = std::make_shared<Adapter>(std::make_shared<CuDILU>(converted->getConvertedMatrix()));
             converted->setUnderlyingPreconditioner(adapted);
             return converted;
-        });
+        });*/
 #endif
     }
 };

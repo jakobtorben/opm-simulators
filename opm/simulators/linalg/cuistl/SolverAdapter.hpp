@@ -27,6 +27,7 @@
 #include <dune/istl/solver.hh>
 #include <opm/common/ErrorMacros.hpp>
 #include <opm/simulators/linalg/cuistl/CuBlockPreconditioner.hpp>
+#include <opm/simulators/linalg/cuistl/CuDILU.hpp>
 #include <opm/simulators/linalg/cuistl/CuOwnerOverlapCopy.hpp>
 #include <opm/simulators/linalg/cuistl/CuSparseMatrix.hpp>
 #include <opm/simulators/linalg/cuistl/CuVector.hpp>
@@ -53,6 +54,8 @@ public:
     using typename Dune::IterativeSolver<X, X>::scalar_real_type;
     static constexpr auto block_size = domain_type::block_type::dimension;
     using XGPU = Opm::cuistl::CuVector<real_type>;
+    using matrix_type = typename Operator::matrix_type;
+    using CUDILU = typename Opm::cuistl::CuDILU<matrix_type, Opm::cuistl::CuVector<real_type>, Opm::cuistl::CuVector<real_type>>;
 
     // TODO: Use a std::forward
     SolverAdapter(Operator& op,
@@ -64,8 +67,22 @@ public:
         : Dune::IterativeSolver<X, X>(op, sp, *prec, reduction, maxit, verbose)
         , m_opOnCPUWithMatrix(op)
         , m_matrix(CuSparseMatrix<real_type>::fromMatrix(op.getmat()))
-        , m_underlyingSolver(constructSolver(prec, reduction, maxit, verbose))
+        , m_prec(std::make_shared<Opm::cuistl::PreconditionerAdapter<X, X, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), m_matrix)))
+        , m_underlyingSolver(constructSolver(m_prec, reduction, maxit, verbose))
     {
+
+        //using CUDILU = typename Opm::cuistl::CuDILU<matrix_type, Opm::cuistl::CuVector<real_type>, Opm::cuistl::CuVector<real_type>>;
+        //Opm::cuistl::CuSparseMatrix<real_type> gpuMatrix = Opm::cuistl::CuSparseMatrix<real_type>::fromMatrix(op.getmat());
+        //auto dilu_prec = std::make_shared<Opm::cuistl::PreconditionerAdapter<X, X, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), m_matrix));
+        //m_underlyingSolver = constructSolver(dilu_prec, reduction, maxit, verbose);
+        
+        //m_underlyingSolver.setPreconditionerGpuMatrix(m_matrix);
+
+    }
+
+public:
+    CuSparseMatrix<real_type>& getGpuMatrix() {
+        return m_matrix;
     }
 
     virtual void apply(X& x, X& b, double reduction, Dune::InverseOperatorResult& res) override
@@ -113,6 +130,7 @@ public:
 private:
     Operator& m_opOnCPUWithMatrix;
     CuSparseMatrix<real_type> m_matrix;
+    std::shared_ptr<Dune::Preconditioner<X, X>> m_prec;
 
     UnderlyingSolver<XGPU> m_underlyingSolver;
 

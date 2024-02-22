@@ -94,16 +94,16 @@ namespace Opm::cuistl
 {
 
 template <class M, class X, class Y, int l>
-CuDILU<M, X, Y, l>::CuDILU(const M& A)
+CuDILU<M, X, Y, l>::CuDILU(const M& A, CuSparseMatrix<field_type>& gpuMatrixRef)
     : m_cpuMatrix(A)
     , m_levelSets(Opm::getMatrixRowColoring(m_cpuMatrix, Opm::ColoringType::LOWER))
     , m_reorderedToNatural(createReorderedToNatural(m_levelSets))
     , m_naturalToReordered(createNaturalToReordered(m_levelSets))
-    , m_gpuMatrix(CuSparseMatrix<field_type>::fromMatrix(m_cpuMatrix, true))
+    , m_gpuMatrix(gpuMatrixRef)
     , m_gpuMatrixReordered(createReorderedMatrix<M, field_type>(m_cpuMatrix, m_reorderedToNatural))
     , m_gpuNaturalToReorder(m_naturalToReordered)
     , m_gpuReorderToNatural(m_reorderedToNatural)
-    , m_gpuDInv(m_gpuMatrix.N() * m_gpuMatrix.blockSize() * m_gpuMatrix.blockSize())
+    , m_gpuDInv(A.N() * A[0][0].N() * A[0][0].N())
 
 {
     // TODO: Should in some way verify that this matrix is symmetric, only do it debug mode?
@@ -122,7 +122,7 @@ CuDILU<M, X, Y, l>::CuDILU(const M& A)
                  fmt::format("CuSparse matrix not same number of non zeroes as DUNE matrix. {} vs {}. ",
                              m_gpuMatrix.nonzeroes(),
                              A.nonzeroes()));
-    update();
+    //update();
 }
 
 template <class M, class X, class Y, int l>
@@ -185,7 +185,7 @@ void
 CuDILU<M, X, Y, l>::update()
 {
     OPM_TIMEBLOCK(prec_update);
-
+    std::cout << "gpu N and CPU N " << m_gpuMatrix.N() << " " << m_cpuMatrix.N() << std::endl;
     m_gpuMatrix.updateNonzeroValues(m_cpuMatrix, true); // send updated matrix to the gpu
 
     detail::copyMatDataToReordered<field_type, blocksize_>(m_gpuMatrix.getNonZeroValues().data(),

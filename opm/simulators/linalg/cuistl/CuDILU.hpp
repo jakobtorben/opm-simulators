@@ -62,7 +62,12 @@ public:
     //! \param A The matrix to operate on.
     //! \param w The relaxation factor.
     //!
-    explicit CuDILU(const M& A);
+    explicit CuDILU(const M& A, CuSparseMatrix<field_type>& gpuMatrixRef);
+
+/*    void setGpuMatrix(CuSparseMatrix<field_type>& gpuMatrix) {
+        m_gpuMatrix = gpuMatrix;
+    }
+*/
 
     //! \brief Prepare the preconditioner.
     //! \note Does nothing at the time being.
@@ -94,6 +99,7 @@ public:
         return false;
     }
 
+    CuSparseMatrix<field_type>& m_gpuMatrix;
 
 private:
     //! \brief Reference to the underlying matrix
@@ -107,7 +113,6 @@ private:
     //! \brief converts from index in natural ordered structure to index reordered strucutre
     std::vector<int> m_naturalToReordered;
     //! \brief The A matrix stored on the gpu, and its reordred version
-    CuSparseMatrix<field_type> m_gpuMatrix;
     CuSparseMatrix<field_type> m_gpuMatrixReordered;
     //! row conversion from natural to reordered matrix indices stored on the GPU
     CuVector<int> m_gpuNaturalToReorder;
