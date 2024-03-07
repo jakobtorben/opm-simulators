@@ -122,7 +122,7 @@ CuDILU<M, X, Y, l>::CuDILU(const M& A, CuSparseMatrix<field_type>& gpuMatrixRef)
                  fmt::format("CuSparse matrix not same number of non zeroes as DUNE matrix. {} vs {}. ",
                              m_gpuMatrix.nonzeroes(),
                              A.nonzeroes()));
-    //update();
+    update();
 }
 
 template <class M, class X, class Y, int l>
@@ -186,7 +186,7 @@ CuDILU<M, X, Y, l>::update()
 {
     OPM_TIMEBLOCK(prec_update);
     std::cout << "gpu N and CPU N " << m_gpuMatrix.N() << " " << m_cpuMatrix.N() << std::endl;
-    m_gpuMatrix.updateNonzeroValues(m_cpuMatrix, true); // send updated matrix to the gpu
+    //m_gpuMatrix.updateNonzeroValues(m_cpuMatrix, true); // send updated matrix to the gpu
 
     detail::copyMatDataToReordered<field_type, blocksize_>(m_gpuMatrix.getNonZeroValues().data(),
                                                            m_gpuMatrix.getRowIndices().data(),

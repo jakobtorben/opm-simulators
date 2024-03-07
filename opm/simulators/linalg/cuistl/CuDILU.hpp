@@ -99,7 +99,6 @@ public:
         return false;
     }
 
-    CuSparseMatrix<field_type>& m_gpuMatrix;
 
 private:
     //! \brief Reference to the underlying matrix
@@ -113,6 +112,7 @@ private:
     //! \brief converts from index in natural ordered structure to index reordered strucutre
     std::vector<int> m_naturalToReordered;
     //! \brief The A matrix stored on the gpu, and its reordred version
+    CuSparseMatrix<field_type>& m_gpuMatrix;
     CuSparseMatrix<field_type> m_gpuMatrixReordered;
     //! row conversion from natural to reordered matrix indices stored on the GPU
     CuVector<int> m_gpuNaturalToReorder;

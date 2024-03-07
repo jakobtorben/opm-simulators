@@ -67,9 +67,9 @@ public:
         : Dune::IterativeSolver<X, X>(op, sp, *prec, reduction, maxit, verbose)
         , m_opOnCPUWithMatrix(op)
         , m_matrix(CuSparseMatrix<real_type>::fromMatrix(op.getmat()))
-        , m_prec(std::make_shared<Opm::cuistl::PreconditionerAdapter<X, X, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), m_matrix)))
-        , m_underlyingSolver(constructSolver(m_prec, reduction, maxit, verbose))
-    {
+        //, m_prec(std::make_shared<Opm::cuistl::PreconditionerAdapter<X, X, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), m_matrix)))
+        , m_underlyingSolver(constructSolver(std::make_shared<CUDILU>(op.getmat(), m_matrix), reduction, maxit, verbose))
+        {
 
         //using CUDILU = typename Opm::cuistl::CuDILU<matrix_type, Opm::cuistl::CuVector<real_type>, Opm::cuistl::CuVector<real_type>>;
         //Opm::cuistl::CuSparseMatrix<real_type> gpuMatrix = Opm::cuistl::CuSparseMatrix<real_type>::fromMatrix(op.getmat());
@@ -136,7 +136,7 @@ private:
 
 
     // TODO: Use a std::forward
-    UnderlyingSolver<XGPU> constructSolver(std::shared_ptr<Dune::Preconditioner<X, X>> prec,
+    UnderlyingSolver<XGPU> constructSolver(std::shared_ptr<CUDILU> prec,
                                            scalar_real_type reduction,
                                            int maxit,
                                            int verbose)
@@ -151,7 +151,7 @@ private:
 
 
 
-
+#if 0
         if constexpr (detail::has_communication<Operator>::value) {
             // TODO: See the below TODO over the definition of precHolder in the other branch
             // TODO: We are currently double wrapping preconditioners in the preconditioner factory to be extra
@@ -222,6 +222,18 @@ private:
             return UnderlyingSolver<XGPU>(
                 matrixOperator, scalarProduct, preconditionerOnGPU, reduction, maxit, verbose);
         }
+#endif
+
+ // TODO: Fix the reliance on casting here. This is a code smell to a certain degree, and assumes
+            //       a certain setup beforehand. The only reason we do it this way is to minimize edits to the
+            //       flexible solver. We could design it differently, but keep this for the time being until
+            //       we figure out how we want to GPU-ify the rest of the system.
+
+            auto matrixOperator
+                = std::make_shared<Dune::MatrixAdapter<CuSparseMatrix<real_type>, XGPU, XGPU>>(m_matrix);
+            auto scalarProduct = std::make_shared<Dune::SeqScalarProduct<XGPU>>();
+            return UnderlyingSolver<XGPU>(
+                matrixOperator, scalarProduct, prec, reduction, maxit, verbose);
     }
 
     std::unique_ptr<XGPU> m_inputBuffer;

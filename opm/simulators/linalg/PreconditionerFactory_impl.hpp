@@ -485,14 +485,13 @@ struct StandardPreconditioners<Operator,Dune::Amg::SequentialInformation>
         });
 
 #if HAVE_CUDA
-        /*
         F::addCreator("CUILU0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
             const double w = prm.get<double>("relaxation", 1.0);
             using field_type = typename V::field_type;
             using CuILU0 = typename Opm::cuistl::CuSeqILU0<M, Opm::cuistl::CuVector<field_type>, Opm::cuistl::CuVector<field_type>>;
             return std::make_shared<Opm::cuistl::PreconditionerAdapter<V, V, CuILU0>>(std::make_shared<CuILU0>(op.getmat(), w));
         });
-
+/*
         F::addCreator("CUILU0Float", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
             const double w = prm.get<double>("relaxation", 1.0);
             using block_type = typename V::block_type;
@@ -519,7 +518,7 @@ struct StandardPreconditioners<Operator,Dune::Amg::SequentialInformation>
             using field_type = typename V::field_type;
             using CUDILU = typename Opm::cuistl::CuDILU<M, Opm::cuistl::CuVector<field_type>, Opm::cuistl::CuVector<field_type>>;
             Opm::cuistl::CuSparseMatrix<field_type> gpuMatrix = Opm::cuistl::CuSparseMatrix<field_type>::fromMatrix(op.getmat());
-            return std::make_shared<Opm::cuistl::PreconditionerAdapter<V, V, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), gpuMatrix));
+            return std::make_shared<Opm::cuistl::PreconditionerAdapter<V, V, CUDILU>>(std::shared_ptr<CUDILU>(nullptr));//op.getmat(), gpuMatrix));
         });
         /*
         F::addCreator("CUDILUFloat", [](const O& op, [[maybe_unused]] const P& prm, const std::function<V()>&, std::size_t) {
