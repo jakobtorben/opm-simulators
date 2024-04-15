@@ -37,7 +37,39 @@
 
 
 namespace Opm::cuistl
+
 {
+
+
+template <class X, class Y>
+class NullPreconditioner : public Dune::PreconditionerWithUpdate<X,X> 
+{
+public:
+    void update() override {
+        std::cout << "Update from dummy preconditioner" << std::endl;
+
+    }
+     virtual void pre(X& x, Y& b) override
+    {
+        std::cout << "Pre from dummy preconditioner" << std::endl;
+    }
+
+    virtual void apply(X& v, const Y& d) override
+    {
+        std::cout << "Apply from dummy preconditioner" << std::endl;
+    }
+
+    virtual void post(X& x) override
+    {
+        std::cout << "Post from dummy preconditioner" << std::endl;
+    }
+
+    virtual Dune::SolverCategory::Category category() const override
+    {
+        std::cout << "Category from dummy preconditioner" << std::endl;
+        return Dune::SolverCategory::sequential;
+    }
+};
 //! @brief Wraps a CUDA solver to work with CPU data.
 //!
 //! @tparam Operator the Dune::LinearOperator to use
@@ -60,11 +92,11 @@ public:
     // TODO: Use a std::forward
     SolverAdapter(Operator& op,
                   Dune::ScalarProduct<X>& sp,
-                  std::shared_ptr<Dune::Preconditioner<X, X>> prec,
+                  std::shared_ptr<Dune::Preconditioner<X, X>> prec_,
                   scalar_real_type reduction,
                   int maxit,
                   int verbose)
-        : Dune::IterativeSolver<X, X>(op, sp, *prec, reduction, maxit, verbose)
+        : Dune::IterativeSolver<X, X>(op, sp, *prec_, reduction, maxit, verbose)
         , m_opOnCPUWithMatrix(op)
         , m_matrix(CuSparseMatrix<real_type>::fromMatrix(op.getmat()))
         //, m_prec(std::make_shared<Opm::cuistl::PreconditionerAdapter<X, X, CUDILU>>(std::make_shared<CUDILU>(op.getmat(), m_matrix)))
@@ -84,12 +116,19 @@ public:
     CuSparseMatrix<real_type>& getGpuMatrix() {
         return m_matrix;
     }
+    
+    Dune::PreconditionerWithUpdate<X,X>& getDummyPreconditioner() {
+        return m_dummy;
+    }
 
     virtual void apply(X& x, X& b, double reduction, Dune::InverseOperatorResult& res) override
     {
         // TODO: Can we do this without reimplementing the other function?
         // TODO: [perf] Do we need to update the matrix every time? Probably yes
         m_matrix.updateNonzeroValues(m_opOnCPUWithMatrix.getmat());
+        auto prec = m_underlyingSolver.get_prec();
+        auto prec_casted = std::dynamic_pointer_cast<CUDILU>(prec);
+        prec_casted->update();
 
         if (!m_inputBuffer) {
             m_inputBuffer.reset(new XGPU(b.dim()));
@@ -130,7 +169,7 @@ public:
 private:
     Operator& m_opOnCPUWithMatrix;
     CuSparseMatrix<real_type> m_matrix;
-    std::shared_ptr<Dune::Preconditioner<X, X>> m_prec;
+    //std::shared_ptr<Dune::Preconditioner<X, X>> m_prec;
 
     UnderlyingSolver<XGPU> m_underlyingSolver;
 
@@ -238,6 +277,8 @@ private:
 
     std::unique_ptr<XGPU> m_inputBuffer;
     std::unique_ptr<XGPU> m_outputBuffer;
+
+    NullPreconditioner<X, X> m_dummy;
 };
 } // namespace Opm::cuistl
 

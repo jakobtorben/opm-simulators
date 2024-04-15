@@ -97,6 +97,12 @@ namespace Dune
     FlexibleSolver<Operator>::
     preconditioner() -> AbstractPrecondType&
     {
+        using SolverAdapterType = typename Opm::cuistl::SolverAdapter<Operator, Dune::ImprovedBiCGSTABSolver, VectorType>;
+        auto castedSolver = std::dynamic_pointer_cast<SolverAdapterType>(linsolver_);
+        if (castedSolver) {
+            return castedSolver->getDummyPreconditioner();
+        }
+        std::cout << "castedSolver.get() = " << castedSolver.get() << std::endl;
         return *preconditioner_;
     }
 

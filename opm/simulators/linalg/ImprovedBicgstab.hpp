@@ -228,6 +228,9 @@ namespace Dune {
     }
 
 
+  auto get_prec() {
+    return _prec;
+  }
 
 
   protected:
