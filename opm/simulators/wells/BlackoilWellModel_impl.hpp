@@ -1245,7 +1245,7 @@ namespace Opm {
                    const double dt,
                    const Domain& domain)
     {
-        OPM_TIMEBLOCK(WellAssembleDomain)
+        OPM_TIMEBLOCK(WellAssembleDomain);
         last_report_ = SimulatorReportSingle();
         Dune::Timer perfTimer;
         perfTimer.start();

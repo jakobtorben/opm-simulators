@@ -362,7 +362,7 @@ private:
                 [[maybe_unused]] const int global_iteration,
                 const bool initial_assembly_required)
     {
-        auto& ebosSimulator = model_.ebosSimulator();
+        auto& modelSimulator = model_.simulator();
 
         SimulatorReportSingle report;
         Dune::Timer solveTimer;
