@@ -26,6 +26,9 @@
 #include <opm/simulators/linalg/PropertyTree.hpp>
 #include <opm/simulators/linalg/matrixblock.hh>
 
+#include <dune/istl/matrixmarket.hh>
+#include <opm/simulators/linalg/MatrixMarketSpecializations.hpp>
+
 #include <cstddef>
 
 namespace Opm
@@ -87,6 +90,14 @@ public:
 
         this->lhs_.resize(this->coarseLevelMatrix_->M());
         this->rhs_.resize(this->coarseLevelMatrix_->N());
+        std::string filename = "./coarsematrix.mm";
+        std::ofstream outfile(filename);
+        if (!outfile) {
+            OPM_THROW(std::ofstream::failure,
+                        "Could not write coarsematrix to file " + filename + ".");
+        }
+        Dune::storeMatrixMarket(*coarseLevelMatrix_, filename);
+
         using OperatorArgs = typename Dune::Amg::ConstructionTraits<CoarseOperator>::Arguments;
         OperatorArgs oargs(coarseLevelMatrix_, *coarseLevelCommunication_);
         this->operator_ = Dune::Amg::ConstructionTraits<CoarseOperator>::construct(oargs);

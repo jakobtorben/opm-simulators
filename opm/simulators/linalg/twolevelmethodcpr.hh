@@ -18,6 +18,9 @@
 #include<dune/common/unused.hh>
 #include<dune/common/version.hh>
 
+#include <dune/istl/matrixmarket.hh>
+#include <opm/simulators/linalg/MatrixMarketSpecializations.hpp>
+
 /**
  * @addtogroup ISTL_PAAMG
  * @{
@@ -510,6 +513,14 @@ public:
     presmooth(context, preSteps_);
     //Coarse grid correction
     policy_->moveToCoarseLevel(*context.rhs);
+    std::string filename = "./coarse_rhs.mm";
+    std::ofstream outfile(filename);
+    if (!outfile) {
+        OPM_THROW(std::ofstream::failure,
+                    "Could not write coarse rhs to file " + filename + ".");
+    }
+    Dune::storeMatrixMarket(policy_->getCoarseLevelRhs(), filename);
+
     InverseOperatorResult res;
     coarseSolver_->apply(policy_->getCoarseLevelLhs(), policy_->getCoarseLevelRhs(), res);
     *context.lhs=0;
