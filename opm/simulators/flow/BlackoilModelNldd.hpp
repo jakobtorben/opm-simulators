@@ -352,6 +352,46 @@ public:
     }
 
 private:
+
+    // HACK copied from NonlinearSolver.cpp. Refactor instead!
+    void detectOscillations(const std::vector<std::vector<double>>& residualHistory,
+                            const int it,
+                            const double relaxRelTol,
+                            bool& oscillate,
+                            bool& stagnate,
+                            DeferredLogger& logger)
+    {
+        // The detection of oscillation in ONE (not two) primary variable results in the report of the detection
+        // of oscillation for the solver.
+        // Only the saturations are used for oscillation detection for the black oil model.
+        // Stagnate is not used for any treatment here.
+
+        if (it < 2) {
+            oscillate = false;
+            stagnate = false;
+            return;
+        }
+        const int numPhases = residualHistory.front().size();
+        stagnate = true;
+        int oscillatePhase = 0;
+        const auto& F0 = residualHistory[it];
+        const auto& F1 = residualHistory[it - 1];
+        const auto& F2 = residualHistory[it - 2];
+        for (int p = 0; p < numPhases; ++p) {
+            const double d1 = std::abs((F0[p] - F2[p]) / F0[p]);
+            const double d2 = std::abs((F0[p] - F1[p]) / F0[p]);
+
+            oscillatePhase += (d1 < relaxRelTol) && (relaxRelTol < d2);
+
+            // Process is 'stagnate' unless at least one phase
+            // exhibits significant residual change.
+            stagnate = (stagnate && !(std::abs((F1[p] - F2[p]) / F2[p]) > 1.0e-3));
+        }
+
+        oscillate = (oscillatePhase > 0);
+    }
+
+
     //! \brief Solve the equation system for a single domain.
     std::pair<SimulatorReportSingle, ConvergenceReport>
     solveDomain(const Domain& domain,
@@ -410,6 +450,10 @@ private:
         // Local Newton loop.
         const int max_iter = model_.param().max_local_solve_iterations_;
         const auto& grid = modelSimulator.vanguard().grid();
+        double damping_factor = 1.0;
+        std::vector<std::vector<double>> convergence_history;
+        convergence_history.reserve(20);
+        convergence_history.push_back(resnorms);
         do {
             // Solve local linear system.
             // Note that x has full size, we expect it to be nonzero only for in-domain cells.
@@ -419,6 +463,9 @@ private:
             detailTimer.start();
             this->solveJacobianSystemDomain(domain, x);
             model_.wellModel().postSolveDomain(x, domain);
+            if (damping_factor != 1.0) {
+                x *= damping_factor;
+            }
             report.linear_solve_time += detailTimer.stop();
             report.linear_solve_setup_time += model_.linearSolveSetupTime();
             report.total_linear_iterations = model_.linearIterationsLastSolve();
@@ -446,7 +493,9 @@ private:
             // Check for local convergence.
             detailTimer.reset();
             detailTimer.start();
+            resnorms.clear();
             convreport = this->getDomainConvergence(domain, timer, iter, logger, resnorms);
+            convergence_history.push_back(resnorms);
 
             // apply the Schur complement of the well model to the
             // reservoir linearized equations
@@ -458,6 +507,16 @@ private:
             const double tt2 = detailTimer.stop();
             report.assemble_time += tt2;
             report.assemble_time_well += tt2;
+
+            // Check if we should dampen. Only do so if wells are converged.
+            if (!convreport.converged() && !convreport.wellFailed()) {
+                bool oscillate, stagnate;
+                detectOscillations(convergence_history, convergence_history.size() - 1, 0.2, oscillate, stagnate, logger);
+                if (oscillate) {
+                    damping_factor *= 0.85;
+                    logger.debug("| Damping factor is now " + std::to_string(damping_factor));
+                }
+            }
         } while (!convreport.converged() && iter <= max_iter);
 
         modelSimulator.problem().endIteration();
