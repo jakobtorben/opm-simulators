@@ -38,10 +38,16 @@ namespace Opm
 /// from file the data in the JSON file will override any other options.
 PropertyTree
 setupPropertyTree(FlowLinearSolverParameters p, // Note: copying the parameters to potentially override.
+                  bool isNLDDLinearSolver,
                   bool linearSolverMaxIterSet,
                   bool linearSolverReductionSet)
 {
-    std::string conf = p.linsolver_;
+    if (isNLDDLinearSolver) {
+        std::string conf = p.linsolver_;
+    }
+    else {
+        std::string conf = p.nldd_linsolver_;
+    }
 
     // Get configuration from file.
     if (conf.size() > 5 && conf.substr(conf.size() - 5, 5) == ".json") { // the ends_with() method is not available until C++20

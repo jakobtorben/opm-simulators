@@ -160,13 +160,11 @@ public:
             const auto& eclState = model_.simulator().vanguard().eclState();
             FlowLinearSolverParameters loc_param;
             loc_param.template init<TypeTag>(eclState.getSimulationConfig().useCPR());
+            loc_param.is_local_solver_ = true;
             // Override solver type with umfpack if small domain.
             // Otherwise hardcode to ILU0
             if (domains_[index].cells.size() < 200) {
-                loc_param.linsolver_ = "umfpack";
-            } else {
-                loc_param.linsolver_ = "ilu0";
-                loc_param.linear_solver_reduction_ = 1e-2;
+                loc_param.nldd_linsolver_ = "umfpack";
             }
             loc_param.linear_solver_print_json_definition_ = false;
             const bool force_serial = true;

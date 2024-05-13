@@ -30,6 +30,7 @@ namespace Opm
 struct FlowLinearSolverParameters;
 
 PropertyTree setupPropertyTree(FlowLinearSolverParameters p,
+                               bool isNLDDlinearSolver,
                                bool linearSolverMaxIterSet,
                                bool linearSolverReductionSet);
 

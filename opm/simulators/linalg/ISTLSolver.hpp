@@ -224,6 +224,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                     para.linsolver_ = "cprw";
                     parameters_.push_back(para);
                     prm_.push_back(setupPropertyTree(parameters_[0],
+                                                     false,
                                                      Parameters::isSet<TypeTag,Properties::LinearSolverMaxIter>(),
                                                      Parameters::isSet<TypeTag,Properties::LinearSolverReduction>()));
                 }
@@ -233,17 +234,20 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                     para.linsolver_ = "ilu0";
                     parameters_.push_back(para);
                     prm_.push_back(setupPropertyTree(parameters_[1],
+                                                     false,
                                                      Parameters::isSet<TypeTag,Properties::LinearSolverMaxIter>(),
                                                      Parameters::isSet<TypeTag,Properties::LinearSolverReduction>()));
                 }
                 // ------------
             } else {
-                // Do a normal linear solver setup.
                 assert(parameters_.size() == 1);
                 assert(prm_.empty());
+
+                // Do a normal linear solver setup.
                 prm_.push_back(setupPropertyTree(parameters_[0],
-                                                 Parameters::isSet<TypeTag,Properties::LinearSolverMaxIter>(),
-                                                 Parameters::isSet<TypeTag,Properties::LinearSolverReduction>()));
+                                                parameters_[0].is_local_solver_,
+                                                Parameters::isSet<TypeTag,Properties::LinearSolverMaxIter>(),
+                                                Parameters::isSet<TypeTag,Properties::LinearSolverReduction>()));
             }
             flexibleSolver_.resize(prm_.size());
 

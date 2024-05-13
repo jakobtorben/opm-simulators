@@ -249,6 +249,7 @@ namespace Opm
         bool   ignoreConvergenceFailure_;
         bool scale_linear_system_;
         std::string linsolver_;
+        bool is_local_solver_;
         bool linear_solver_print_json_definition_;
         int cpr_reuse_setup_;
         int cpr_reuse_interval_;
@@ -275,6 +276,7 @@ namespace Opm
             ignoreConvergenceFailure_ = Parameters::get<TypeTag, Properties::LinearSolverIgnoreConvergenceFailure>();
             scale_linear_system_ = Parameters::get<TypeTag, Properties::ScaleLinearSystem>();
             linsolver_ = Parameters::get<TypeTag, Properties::LinearSolver>();
+            nldd_linsolver_ = Parameters::get<TypeTag, Properties::NLDDLinearSolver>();
             linear_solver_print_json_definition_ = Parameters::get<TypeTag, Properties::LinearSolverPrintJsonDefinition>();
             cpr_reuse_setup_  = Parameters::get<TypeTag, Properties::CprReuseSetup>();
             cpr_reuse_interval_  = Parameters::get<TypeTag, Properties::CprReuseInterval>();
@@ -337,6 +339,11 @@ namespace Opm
                  "cpr_trueimpes, cpr_trueimpesanalytic, amg or hybrid (experimental). "
                  "Alternatively, you can request a configuration to be read from a "
                  "JSON file by giving the filename here, ending with '.json.'");
+            Parameters::registerParam<TypeTag, Properties::NLDDLinearSolver>
+                ("Configuration of local linear solver for NLDD. Valid options are: ilu0 (default), "
+                 "dilu, cpr_quasiimpes and amg. "
+                 "Alternatively, you can request a configuration to be read from a "
+                 "JSON file by giving the filename here, ending with '.json.'");
             Parameters::registerParam<TypeTag, Properties::LinearSolverPrintJsonDefinition>
                 ("Write the JSON definition of the linear solver setup to the DBG file.");
             Parameters::registerParam<TypeTag, Properties::CprReuseSetup>
@@ -382,6 +389,7 @@ namespace Opm
             ignoreConvergenceFailure_ = false;
             scale_linear_system_      = false;
             linsolver_                = "ilu0";
+            nldd_linsolver_           = "ilu0";
             linear_solver_print_json_definition_ = true;
             cpr_reuse_setup_          = 4;
             cpr_reuse_interval_       = 30;
