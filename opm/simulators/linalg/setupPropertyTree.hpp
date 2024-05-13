@@ -32,6 +32,9 @@ struct FlowLinearSolverParameters;
 PropertyTree setupPropertyTree(FlowLinearSolverParameters p,
                                bool linearSolverMaxIterSet,
                                bool linearSolverReductionSet);
+PropertyTree setupLocalPropertyTree(FlowLinearSolverParameters p,
+                               bool linearSolverMaxIterSet,
+                               bool linearSolverReductionSet);
 
 PropertyTree setupCPRW(const std::string& conf, const FlowLinearSolverParameters& p);
 PropertyTree setupCPR(const std::string& conf, const FlowLinearSolverParameters& p);

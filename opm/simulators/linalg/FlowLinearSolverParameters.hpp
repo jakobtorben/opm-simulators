@@ -249,6 +249,7 @@ namespace Opm
         bool   ignoreConvergenceFailure_;
         bool scale_linear_system_;
         std::string linsolver_;
+        bool is_local_solver_;
         bool linear_solver_print_json_definition_;
         int cpr_reuse_setup_;
         int cpr_reuse_interval_;
@@ -382,6 +383,7 @@ namespace Opm
             ignoreConvergenceFailure_ = false;
             scale_linear_system_      = false;
             linsolver_                = "ilu0";
+            is_local_solver_          = false;
             linear_solver_print_json_definition_ = true;
             cpr_reuse_setup_          = 4;
             cpr_reuse_interval_       = 30;

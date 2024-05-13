@@ -31,6 +31,52 @@
 namespace Opm
 {
 
+
+/// Set up a property tree for the local linear solver, using a JSON file
+PropertyTree
+setupLocalPropertyTree(FlowLinearSolverParameters p, // Note: copying the parameters to potentially override.
+                  bool linearSolverMaxIterSet,
+                  bool linearSolverReductionSet)
+{
+    std::string conf = p.linsolver_;
+
+    // Check if the configuration string ends with ".json" (since C++20 ends_with() is not available)
+    if (conf.size() > 5 && conf.substr(conf.size() - 5, 5) == ".json") {
+#if BOOST_VERSION / 100 % 1000 > 48
+        if (!std::filesystem::exists(conf)) {
+            OPM_THROW(std::invalid_argument, "JSON file " + conf + " does not exist.");
+        }
+
+        PropertyTree propTree(conf);
+
+        // Try to access the local_solver section of the JSON structure
+        std::optional<PropertyTree> localSolverTreeOpt = propTree.get_child_optional("local_solver");
+        if (!localSolverTreeOpt) {
+            OPM_THROW(std::invalid_argument, "No local solver configuration found in JSON file " + conf);
+        }
+
+        PropertyTree localSolverTree = localSolverTreeOpt.value();
+
+        // Optionally override properties based on function arguments
+        if (linearSolverMaxIterSet) {
+            localSolverTree.put("maxiter", p.linear_solver_maxiter_);
+        }
+
+        if (linearSolverReductionSet) {
+            localSolverTree.put("tol", p.linear_solver_reduction_);
+        }
+
+        return localSolverTree;
+#else
+        OPM_THROW(std::invalid_argument,
+                  "--linear-solver-configuration=file.json not supported with "
+                  "boost version. Needs version > 1.48.");
+#endif
+    }
+}
+
+
+
 /// Set up a property tree intended for FlexibleSolver by either reading
 /// the tree from a JSON file or creating a tree giving the default solver
 /// and preconditioner. If the latter, the parameters --linear-solver-reduction,
@@ -49,12 +95,27 @@ setupPropertyTree(FlowLinearSolverParameters p, // Note: copying the parameters 
         if ( !std::filesystem::exists(conf) ) {
             OPM_THROW(std::invalid_argument, "JSON file " + conf + " does not exist.");
         }
-        try {
-            return PropertyTree(conf);
+
+        PropertyTree propTree(conf);
+
+        // Try to access the global_solver section of the JSON structure
+        std::optional<PropertyTree> globalSolverTreeOpt = propTree.get_child_optional("global_solver");
+        if (!globalSolverTreeOpt) {
+            OPM_THROW(std::invalid_argument, "No global solver configuration found in JSON file " + conf);
         }
-        catch (...) {
-            OPM_THROW(std::invalid_argument, "Failed reading linear solver configuration from JSON file " + conf);
+
+        PropertyTree globalSolverTree = globalSolverTreeOpt.value();
+
+        // Optionally override properties based on function arguments
+        if (linearSolverMaxIterSet) {
+            globalSolverTree.put("maxiter", p.linear_solver_maxiter_);
         }
+
+        if (linearSolverReductionSet) {
+            globalSolverTree.put("tol", p.linear_solver_reduction_);
+        }
+
+        return globalSolverTree;
 #else
         OPM_THROW(std::invalid_argument,
                   "--linear-solver-configuration=file.json not supported with "

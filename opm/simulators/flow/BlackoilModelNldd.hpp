@@ -165,8 +165,7 @@ public:
             if (domains_[index].cells.size() < 200) {
                 loc_param.linsolver_ = "umfpack";
             } else {
-                loc_param.linsolver_ = "ilu0";
-                loc_param.linear_solver_reduction_ = 1e-2;
+                loc_param.is_local_solver_ = true;
             }
             loc_param.linear_solver_print_json_definition_ = false;
             const bool force_serial = true;
