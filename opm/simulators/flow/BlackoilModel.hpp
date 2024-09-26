@@ -601,7 +601,7 @@ namespace Opm {
             resultDenom = gridView.comm().sum(resultDenom);
 
             if (resultDenom > 0.0)
-                return resultDelta/resultDenom;
+                return std::sqrt(resultDelta)/std::sqrt(resultDenom);
             return 0.0;
         }
 

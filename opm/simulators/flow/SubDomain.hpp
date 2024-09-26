@@ -39,7 +39,8 @@ namespace Opm
     enum class DomainOrderingMeasure {
         AveragePressure,
         MaxPressure,
-        Residual
+        Residual,
+        MinWaterSat
     };
 
     inline DomainOrderingMeasure domainOrderingMeasureFromString(const std::string_view measure)
@@ -50,6 +51,8 @@ namespace Opm
             return DomainOrderingMeasure::MaxPressure;
         } else if (measure == "averagepressure") {
             return DomainOrderingMeasure::AveragePressure;
+        } else if (measure == "minwatersat") {
+            return DomainOrderingMeasure::MinWaterSat;
         } else {
             throw std::runtime_error(fmt::format("Invalid domain ordering '{}' specified", measure));
         }

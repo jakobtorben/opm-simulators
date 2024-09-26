@@ -792,6 +792,17 @@ private:
                 }
                 break;
             }
+            case DomainOrderingMeasure::MinWaterSat: {
+                // Use min water saturation to order domains.
+                for (const auto& domain : domains_) {
+                    Scalar minsat = 1.0;
+                    for (const int c : domain.cells) {
+                        minsat = std::min(minsat, solution[c][Indices::waterSwitchIdx]);
+                    }
+                    measure_per_domain[domain.index] = 1./minsat;
+                }
+                break;
+            }
             } // end of switch (model_.param().local_domain_ordering_)
 
             // Sort by largest measure, keeping index order if equal.
