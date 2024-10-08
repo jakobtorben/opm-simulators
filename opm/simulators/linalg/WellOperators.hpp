@@ -123,8 +123,44 @@ public:
         return wellMod_.numLocalWellsEnd();
     }
 
-private:
+protected:
     const WellModel& wellMod_;
+};
+
+
+template <class WellModel, class X, class Y>
+class DomainWellModelAsLinearOperator : public WellModelAsLinearOperator<WellModel, X, Y>
+{
+public:
+    using Base = WellModelAsLinearOperator<WellModel, X, Y>;
+    using Base::Base;
+    using field_type = typename X::field_type;
+    using PressureMatrix = typename Base::PressureMatrix;
+
+    void setDomainIndex(int index) { domainIndex_ = index; }
+
+    void apply(const X& x, Y& y) const override
+    {
+        OPM_TIMEBLOCK(apply);
+        this->wellMod_.applyDomain(x, y, domainIndex_);
+    }
+
+    void applyscaleadd(field_type alpha, const X& x, Y& y) const override
+    {
+        OPM_TIMEBLOCK(applyscaleadd);
+        this->wellMod_.applyScaleAddDomain(alpha, x, y, domainIndex_);
+    }
+
+    void addWellPressureEquations(PressureMatrix& jacobian,
+                                  const X& weights,
+                                  const bool use_well_weights) const override
+    {
+        OPM_TIMEBLOCK(addWellPressureEquations);
+        this->wellMod_.addWellPressureEquationsDomain(jacobian, weights, use_well_weights, domainIndex_);
+    }
+
+private:
+    int domainIndex_ = -1;
 };
 
 /*!
