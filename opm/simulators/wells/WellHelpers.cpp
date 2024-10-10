@@ -49,7 +49,7 @@ ParallelStandardWellB(const Matrix& B,
 template<typename Scalar>
 template<class X, class Y>
 void ParallelStandardWellB<Scalar>::
-mv (const X& x, Y& y) const
+mv (const X& x, Y& y, const std::vector<std::pair<int, int>>& perm) const
 {
 #if !defined(NDEBUG) && HAVE_MPI
     // We need to make sure that all ranks are actually computing
@@ -87,7 +87,18 @@ mv (const X& x, Y& y) const
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 #endif
-    B_.mv(x, y);
+    //B_.mv(x, y);
+    y = 0;
+    // Perform y = B_ * x in permutation order
+    for (std::size_t i = 0; i < B_.N(); ++i)
+    {
+        for (const auto& [cell, perm_idx] : perm)
+        {
+            auto&& xj = Dune::Impl::asVector(x[perm_idx]);
+            auto&& yi = Dune::Impl::asVector(y[i]);
+            Dune::Impl::asMatrix(B_[i][perm_idx]).umv(xj, yi);
+        }
+    }
 
     if (this->parallel_well_info_.communication().size() > 1)
     {
@@ -106,19 +117,30 @@ mv (const X& x, Y& y) const
 template<typename Scalar>
 template<class X, class Y>
 void ParallelStandardWellB<Scalar>::
-mmv (const X& x, Y& y) const
+mmv (const X& x, Y& y, const std::vector<std::pair<int, int>>& perm) const
 {
     if (this->parallel_well_info_.communication().size() == 1)
     {
         // Do the same thing as before. The else branch
         // produces different rounding errors and results
         // slightly different iteration counts / well curves
-        B_.mmv(x, y);
+        
+        //B_.mmv(x, y);
+        // Perform y -= B_ * x in permutation order
+    for (std::size_t i = 0; i < B_.N(); ++i)
+    {
+        for (const auto& [cell, perm_idx] : perm)
+        {
+            auto&& xj = Dune::Impl::asVector(x[perm_idx]);
+            auto&& yi = Dune::Impl::asVector(y[i]);
+                Dune::Impl::asMatrix(B_[i][perm_idx]).mmv(xj, yi);
+            }
+        }
     }
     else
     {
         Y temp(y);
-        mv(x, temp); // includes parallel reduction
+        mv(x, temp, perm); // includes parallel reduction
         y -= temp;
     }
 }
@@ -225,9 +247,9 @@ using Comm = Parallel::Communication;
 
 #define INSTANTIATE(T,Dim)                       \
     template void ParallelStandardWellB<T>::     \
-        mv(const Vec<T,Dim>&,DynVec<T>&) const;  \
+        mv(const Vec<T,Dim>&,DynVec<T>&, const std::vector<std::pair<int, int>>&) const;  \
     template void ParallelStandardWellB<T>::     \
-        mmv(const Vec<T,Dim>&,DynVec<T>&) const;
+        mmv(const Vec<T,Dim>&,DynVec<T>&, const std::vector<std::pair<int, int>>&) const;
 
 #define INSTANTIATE_TYPE(T)                                               \
     template class ParallelStandardWellB<T>;                              \

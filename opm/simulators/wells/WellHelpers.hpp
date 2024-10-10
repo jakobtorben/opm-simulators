@@ -58,11 +58,11 @@ public:
 
     //! y = A x
     template<class X, class Y>
-    void mv (const X& x, Y& y) const;
+    void mv (const X& x, Y& y, const std::vector<std::pair<int, int>>& perm) const;
 
     //! y = A x
     template<class X, class Y>
-    void mmv (const X& x, Y& y) const;
+    void mmv (const X& x, Y& y, const std::vector<std::pair<int, int>>& perm) const;
 
 private:
     const Matrix& B_;

@@ -62,22 +62,22 @@ namespace Helper
             std::string filename = prefix + "matrix_istl";
 #if HAVE_MPI
             if (comm != nullptr) { // comm is not set in serial runs
-                Dune::storeMatrixMarket(matrix, filename, *comm, true);
+                Dune::storeMatrixMarket(matrix, filename, *comm, true, 18);
             } else
 #endif
             {
-                Dune::storeMatrixMarket(matrix, filename + ".mm");
+                Dune::storeMatrixMarket(matrix, filename + ".mm", 18);
             }
         }
         {
             std::string filename = prefix + "rhs_istl";
 #if HAVE_MPI
             if (comm != nullptr) { // comm is not set in serial runs
-                Dune::storeMatrixMarket(rhs, filename, *comm, true);
+                Dune::storeMatrixMarket(rhs, filename, *comm, true, 18);
             } else
 #endif
             {
-                Dune::storeMatrixMarket(rhs, filename + ".mm");
+                Dune::storeMatrixMarket(rhs, filename + ".mm", 18);
             }
         }
     }

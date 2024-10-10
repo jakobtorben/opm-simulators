@@ -144,6 +144,9 @@ private:
     // Wrapper for the parallel application of B for distributed wells
     wellhelpers::ParallelStandardWellB<Scalar> parallelB_;
 
+    // permutation vector
+    std::vector<std::pair<int, int>> perm_;
+
     // residuals of the well equations
     BVectorWell resWell_;
 

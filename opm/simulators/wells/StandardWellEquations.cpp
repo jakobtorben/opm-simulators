@@ -114,6 +114,14 @@ init(const int num_cells,
 
     // Store the global index of well perforated cells
     cells_ = cells;
+
+    // Create and sort perm_
+    perm_.resize(cells.size());
+    for (size_t i = 0; i < cells.size(); ++i) {
+        perm_[i] = std::make_pair(cells[i], i);
+    }
+    std::sort(perm_.begin(), perm_.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
 }
 
 template<class Scalar, int numEq>
@@ -132,7 +140,7 @@ void StandardWellEquations<Scalar,numEq>::apply(const BVector& x, BVector& Ax) c
     assert(invDrw_.size() == invDuneD_.N());
 
     // Bx_ = duneB_ * x
-    parallelB_.mv(x, Bx_);
+    parallelB_.mv(x, Bx_, perm_);
 
     // invDBx = invDuneD_ * Bx_
     // TODO: with this, we modified the content of the invDrw_.
@@ -188,7 +196,7 @@ recoverSolutionWell(const BVector& x, BVectorWell& xw) const
 {
     BVectorWell resWell = resWell_;
     // resWell = resWell - B * x
-    parallelB_.mmv(x, resWell);
+    parallelB_.mmv(x, resWell, perm_);
     // xw = D^-1 * resWell
     invDuneD_.mv(resWell, xw);
 }
