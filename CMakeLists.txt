@@ -35,8 +35,10 @@ option(USE_DAMARIS_LIB "Use the Damaris library for asynchronous I/O?" OFF)
 option(USE_GPU_BRIDGE "Enable the GPU bridge (GPU/AMGCL solvers)" ON)
 option(USE_TRACY_PROFILER "Enable tracy profiling" OFF)
 option(CONVERT_CUDA_TO_HIP "Convert CUDA code to HIP (to run on AMD cards)" OFF)
+option(USE_AMGX "Enable AMGX support?" OFF)
 option(USE_HYPRE "Use the Hypre library for linear solvers?" OFF)
 set(OPM_COMPILE_COMPONENTS "2;3;4;5;6;7" CACHE STRING "The components to compile support for")
+
 
 # Ensure OPM_COMPILE_COMPONENTS is a list of at least one element
 if(OPM_COMPILE_COMPONENTS STREQUAL "")
@@ -734,4 +736,17 @@ endif()
 
 if(HYPRE_FOUND)
   target_link_libraries(opmsimulators PUBLIC HYPRE::HYPRE)
+endif()
+
+# Find AMGX
+if(USE_AMGX)
+  find_package(AMGX)
+  if(AMGX_FOUND)
+    set(HAVE_AMGX 1)
+    include_directories(SYSTEM ${AMGX_INCLUDE_DIRS})
+    target_link_libraries(opmsimulators PUBLIC AMGX::AMGX)
+  else()
+    message(WARNING "AMGX requested but not found. Continuing without AMGX support.")
+    set(USE_AMGX OFF)
+  endif()
 endif()

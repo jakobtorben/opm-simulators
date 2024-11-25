@@ -10,6 +10,7 @@ set (opm-simulators_CONFIG_VAR
   HAVE_OPENCL
   HAVE_OPENCL_HPP
   HAVE_AMGCL
+  HAVE_AMGX
   HAVE_VEXCL
   HAVE_ROCALUTION
   HAVE_ROCSPARSE
@@ -33,6 +34,8 @@ set (opm-simulators_CONFIG_VAR
 
 # dependencies
 set (opm-simulators_DEPS
+  # AMGX solver library
+  "AMGX"
   # Compile with C99 support if available
   "C99"
   # Various runtime library enhancements

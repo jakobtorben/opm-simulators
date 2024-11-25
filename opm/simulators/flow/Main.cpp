@@ -39,6 +39,10 @@
 #include <HYPRE_utilities.h>
 #endif
 
+#if HAVE_AMGX
+#include <amgx_c.h>
+#endif
+
 namespace Opm {
 
 Main::Main(int argc, char** argv, bool ownMPI)
@@ -94,6 +98,10 @@ Main::~Main()
 
 #if HAVE_HYPRE
     HYPRE_Finalize();
+#endif
+
+#if HAVE_AMGX
+    AMGX_SAFE_CALL(AMGX_finalize());
 #endif
 
     if (ownMPI_) {
@@ -174,6 +182,10 @@ void Main::initMPI()
 
 #if HAVE_HYPRE
     HYPRE_Initialize();
+#endif
+
+#if HAVE_AMGX
+    AMGX_SAFE_CALL(AMGX_initialize());
 #endif
 }
 
