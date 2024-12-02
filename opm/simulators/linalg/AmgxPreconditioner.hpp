@@ -138,7 +138,17 @@ public:
     {
         OPM_TIMEBLOCK(prec_update);
         copyMatrixToAmgx();
-        AMGX_SAFE_CALL(AMGX_solver_setup(solver_, A_amgx_));
+
+        if (update_counter_ == 0) {
+            AMGX_SAFE_CALL(AMGX_solver_setup(solver_, A_amgx_));
+        } else {
+            AMGX_SAFE_CALL(AMGX_solver_resetup(solver_, A_amgx_));
+        }
+
+        ++update_counter_;
+        if (update_counter_ >= setup_frequency_) {
+            update_counter_ = 0;
+        }
     }
 
     Dune::SolverCategory::Category category() const override
@@ -153,6 +163,9 @@ public:
     }
 
 private:
+    static constexpr int setup_frequency_ = 30;
+    int update_counter_ = 0;
+
     void setupSparsityPattern()
     {
         int pos = 0;
