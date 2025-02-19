@@ -457,7 +457,7 @@ private:
                                 modelSimulator.timeStepSize(),
                                 domain);
             // Assemble reservoir locally.
-            report += this->assembleReservoirDomain(domain);
+            this->assembleReservoirDomain(domain);
             report.assemble_time += detailTimer.stop();
         }
         detailTimer.reset();
@@ -521,7 +521,7 @@ private:
             wellModel_.assemble(modelSimulator.model().newtonMethod().numIterations(),
                                 modelSimulator.timeStepSize(),
                                 domain);
-            report += this->assembleReservoirDomain(domain);
+            this->assembleReservoirDomain(domain);
             report.assemble_time += detailTimer.stop();
 
             // Check for local convergence.
@@ -567,11 +567,10 @@ private:
     }
 
     /// Assemble the residual and Jacobian of the nonlinear system.
-    SimulatorReportSingle assembleReservoirDomain(const Domain& domain)
+    void assembleReservoirDomain(const Domain& domain)
     {
         // -------- Mass balance equations --------
         model_.simulator().model().linearizer().linearizeDomain(domain);
-        return model_.wellModel().lastReport();
     }
 
     //! \brief Solve the linearized system for a domain.
