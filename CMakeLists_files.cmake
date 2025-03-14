@@ -433,6 +433,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_wellmodel.cpp
   tests/test_wellprodindexcalculator.cpp
   tests/test_wellstate.cpp
+  tests/test_wellmatrixmerger.cpp
   )
 
 if (HAVE_ECL_INPUT)
@@ -1210,6 +1211,9 @@ list (APPEND EXAMPLE_SOURCE_FILES
   examples/printvfp.cpp
   examples/tutorial1.cpp
   examples/waterair_pvs_ni.cpp
+  examples/well_matrix_merger_example.cpp
+  examples/matrix_merger_example.cpp
+  examples/matrix_merger_solver_example.cpp
 )
 if(HDF5_FOUND)
   list (APPEND EXAMPLE_SOURCE_FILES
