@@ -828,7 +828,7 @@ private:
         } else if (model_.param().local_solve_approach_ == DomainSolveApproach::GaussSeidel) {
             // Calculate the measure used to order the domains.
             std::vector<Scalar> measure_per_domain(domains_.size());
-            switch (model_.param().local_domain_ordering_) {
+            switch (model_.param().local_domains_ordering_) {
             case DomainOrderingMeasure::AveragePressure: {
                 // Use average pressures to order domains.
                 for (const auto& domain : domains_) {
@@ -867,7 +867,7 @@ private:
                 }
                 break;
             }
-            } // end of switch (model_.param().local_domain_ordering_)
+            } // end of switch (model_.param().local_domains_ordering_)
 
             // Sort by largest measure, keeping index order if equal.
             const auto& m = measure_per_domain;
@@ -1002,7 +1002,7 @@ private:
 
         auto zoltan_ctrl = ZoltanPartitioningControl<Element>{};
 
-        zoltan_ctrl.domain_imbalance = param.local_domain_partition_imbalance_;
+        zoltan_ctrl.domain_imbalance = param.local_domains_partition_imbalance_;
 
         zoltan_ctrl.index =
             [elementMapper = &this->model_.simulator().model().elementMapper()]
@@ -1019,7 +1019,7 @@ private:
         };
 
         // Forming the list of wells is expensive, so do this only if needed.
-        const auto need_wells = param.local_domain_partition_method_ == "zoltan";
+        const auto need_wells = param.local_domains_partition_method_ == "zoltan";
 
         const auto wells = need_wells
             ? this->model_.simulator().vanguard().schedule().getWellsatEnd()
@@ -1034,12 +1034,10 @@ private:
         const int num_domains = (param.num_local_domains_ > 0)
             ? param.num_local_domains_
             : detail::countGlobalCells(grid) / default_cells_per_domain;
-        // TODO: Make this a parameter
-        const int num_neighbor_levels = 1;
-        return ::Opm::partitionCells(param.local_domain_partition_method_,
+        return ::Opm::partitionCells(param.local_domains_partition_method_,
                                      num_domains, grid.leafGridView(), wells,
                                      possibleFutureConnectionSet, zoltan_ctrl,
-                                     num_neighbor_levels);
+                                     param.local_domains_partition_well_neighbor_levels_);
     }
 
     std::vector<int> reconstitutePartitionVector() const
