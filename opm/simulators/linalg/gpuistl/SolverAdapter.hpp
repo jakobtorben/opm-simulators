@@ -27,6 +27,7 @@
 
 #include <opm/common/ErrorMacros.hpp>
 
+#include <opm/simulators/linalg/WellOperators.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuBlockPreconditioner.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
@@ -47,6 +48,135 @@
 
 namespace Opm::gpuistl
 {
+
+// GPU-specific well operator that adapts a CPU well operator to work with GPU vectors
+template <class X, class XGPU>
+class GpuWellOperator : public Opm::LinearOperatorExtra<XGPU, XGPU> {
+public:
+    using Base = Opm::LinearOperatorExtra<XGPU, XGPU>;
+    using typename Base::field_type;
+    using typename Base::PressureMatrix;
+    static constexpr auto block_size = X::block_type::dimension;
+
+    // Use shared_ptr instead of reference to ensure the CPU operator stays alive
+    explicit GpuWellOperator(std::shared_ptr<const Opm::LinearOperatorExtra<X, X>> cpuOp)
+        : m_cpuOp(std::move(cpuOp)) {}
+
+    void apply(const XGPU& x, XGPU& y) const override {
+        // Convert GPU vectors to CPU for the well operator
+        const int numBlocks = x.dim() / block_size;
+        X x_cpu(numBlocks);
+        X y_cpu(numBlocks); 
+
+        // Copy data from GPU to CPU
+        x.copyToHost(x_cpu);
+        y.copyToHost(y_cpu);
+
+        // Apply the CPU well operator
+        m_cpuOp->apply(x_cpu, y_cpu);
+
+        // Copy results back to GPU
+        y.copyFromHost(y_cpu);
+    }
+
+    void applyscaleadd(field_type alpha, const XGPU& x, XGPU& y) const override {
+        // Convert GPU vectors to CPU for the well operator
+        const int numBlocks = x.dim() / block_size;
+        X x_cpu(numBlocks);
+        X y_cpu(numBlocks); 
+
+        // Copy data from GPU to CPU
+        x.copyToHost(x_cpu);
+        y.copyToHost(y_cpu);
+
+        // Apply the CPU well operator
+        m_cpuOp->applyscaleadd(alpha, x_cpu, y_cpu);
+
+        // Copy results back to GPU
+        y.copyFromHost(y_cpu);
+    }
+
+    Dune::SolverCategory::Category category() const override {
+        return m_cpuOp->category();
+    }
+
+    void addWellPressureEquations(PressureMatrix& jacobian,
+                                 const XGPU& weights,
+                                 const bool use_well_weights) const override {
+
+        const int numBlocks = weights.dim() / block_size;
+        X weights_cpu(numBlocks);
+
+        // Copy data from GPU to CPU
+        weights.copyToHost(weights_cpu);
+
+        // Forward to CPU version
+        m_cpuOp->addWellPressureEquations(jacobian, weights_cpu, use_well_weights);
+    }
+
+    void addWellPressureEquationsStruct(PressureMatrix& jacobian) const override {
+        m_cpuOp->addWellPressureEquationsStruct(jacobian);
+    }
+
+    int getNumberOfExtraEquations() const override {
+        return m_cpuOp->getNumberOfExtraEquations();
+    }
+
+private:
+    // Store a shared_ptr to the original CPU operator
+    std::shared_ptr<const Opm::LinearOperatorExtra<X, X>> m_cpuOp;
+};
+
+// GPU-specific matrix adapter that works with GPU vectors without calling project()
+template <class real_type, class XGPU>
+class GpuWellModelMatrixAdapter : public Dune::AssembledLinearOperator<GpuSparseMatrix<real_type>, XGPU, XGPU>
+{
+public:
+    using matrix_type = GpuSparseMatrix<real_type>;
+    using domain_type = XGPU;
+    using range_type = XGPU;
+    using field_type = typename XGPU::field_type;
+    using PressureMatrix = Dune::BCRSMatrix<Opm::MatrixBlock<field_type, 1, 1>>;
+
+    GpuWellModelMatrixAdapter(const matrix_type& A, const Opm::LinearOperatorExtra<XGPU, XGPU>& wellOper)
+        : A_(A), wellOper_(wellOper)
+    {}
+
+    void apply(const domain_type& x, range_type& y) const override
+    {
+        A_.mv(x, y);
+
+        // Add well model modification to y
+        wellOper_.apply(x, y);
+
+        // Skip the project() call that's causing problems
+    }
+
+    void applyscaleadd(field_type alpha, const domain_type& x, range_type& y) const override
+    {
+        A_.usmv(alpha, x, y);
+
+        // Add scaled well model modification to y
+        wellOper_.applyscaleadd(alpha, x, y);
+
+        // Skip the project() call that's causing problems
+    }
+
+    Dune::SolverCategory::Category category() const override
+    {
+        return Dune::SolverCategory::sequential;
+    }
+
+    const matrix_type& getmat() const override
+    {
+        return A_;
+    }
+
+private:
+    const matrix_type& A_;
+    const Opm::LinearOperatorExtra<XGPU, XGPU>& wellOper_;
+};
+
 //! @brief Wraps a CUDA solver to work with CPU data.
 //!
 //! @tparam Operator the Dune::LinearOperator to use
@@ -63,7 +193,6 @@ public:
     using typename Dune::IterativeSolver<X, X>::scalar_real_type;
     static constexpr auto block_size = domain_type::block_type::dimension;
     using XGPU = Opm::gpuistl::GpuVector<real_type>;
-
 
     //! @brief constructor
     //!
@@ -89,10 +218,10 @@ public:
         , m_underlyingSolver(constructSolver(prec, reduction, maxit, verbose, comm))
     {
         OPM_ERROR_IF(
-            detail::is_a_well_operator<Operator>::value,
-            "Currently we only support operators of type MatrixAdapter in the CUDA/HIP solver. "
+            (detail::is_a_well_operator<Operator>::value && !std::is_same_v<Comm, Dune::Amg::SequentialInformation>),
+            "Currently we only support well operators in serial for the CUDA/HIP solver. "
             "Use --matrix-add-well-contributions=true. "
-            "Using WellModelMatrixAdapter with SolverAdapter is not well-defined so it will not work well, or at all.");
+            "Using WellModelMatrixAdapter with SolverAdapter in parallel is not well-defined so it will not work well, or at all.");
     }
 
     virtual void apply(X& x, X& b, double reduction, Dune::InverseOperatorResult& res) override
@@ -142,7 +271,6 @@ private:
     GpuSparseMatrix<real_type> m_matrix;
 
     UnderlyingSolver<XGPU> m_underlyingSolver;
-
 
     // TODO: Use a std::forward
     // This is the MPI parallel case (general communication object)
@@ -261,12 +389,47 @@ private:
         auto preconditionerOnGPU = precAsHolder->getUnderlyingPreconditioner();
 
         auto matrixOperator = std::make_shared<Dune::MatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>>(m_matrix);
+
+        // Try to get the well operator from the original operator
+        using SeqOperatorType = Opm::WellModelMatrixAdapter<Dune::BCRSMatrix<Opm::MatrixBlock<real_type, block_size, block_size>>, X, X, false>;
+        auto* wellOp = dynamic_cast<const SeqOperatorType*>(&m_opOnCPUWithMatrix);
+
+        // Create our scalar product
         auto scalarProduct = std::make_shared<Dune::SeqScalarProduct<XGPU>>();
-        return UnderlyingSolver<XGPU>(matrixOperator, scalarProduct, preconditionerOnGPU, reduction, maxit, verbose);
+
+        // Check if we have a well operator
+        if (wellOp) {
+            // Create a shared_ptr to the well operator to ensure it stays alive
+            // The shared_ptr will be owned by the GpuWellOperator
+            m_wellOperator = std::shared_ptr<const Opm::LinearOperatorExtra<X, X>>(
+                &wellOp->getWellOperator(),
+                [](const Opm::LinearOperatorExtra<X, X>*) { /* non-owning deleter */ }
+            );
+
+            // Create adapter to convert between CPU and GPU well operators
+            m_gpuWellOperator = std::make_shared<GpuWellOperator<X, XGPU>>(m_wellOperator);
+
+            // Create matrix adapter for the GPU
+            m_gpuMatrixOperator = std::make_shared<GpuWellModelMatrixAdapter<real_type, XGPU>>(
+                m_matrix, *m_gpuWellOperator);
+
+            return UnderlyingSolver<XGPU>(m_gpuMatrixOperator, scalarProduct, preconditionerOnGPU, 
+                                          reduction, maxit, verbose);
+        } else {
+            // No well operator, use the basic matrix operator
+            return UnderlyingSolver<XGPU>(matrixOperator, scalarProduct, preconditionerOnGPU, 
+                                          reduction, maxit, verbose);
+        }
     }
 
     std::unique_ptr<XGPU> m_inputBuffer;
     std::unique_ptr<XGPU> m_outputBuffer;
+
+    // Store the GPU well operator to manage its lifetime
+    // These must be kept alive as long as m_underlyingSolver is alive
+    std::shared_ptr<const Opm::LinearOperatorExtra<X, X>> m_wellOperator;
+    std::shared_ptr<GpuWellOperator<X, XGPU>> m_gpuWellOperator;
+    std::shared_ptr<GpuWellModelMatrixAdapter<real_type, XGPU>> m_gpuMatrixOperator;
 };
 
 } // namespace Opm::gpuistl
