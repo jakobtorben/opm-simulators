@@ -28,6 +28,7 @@
 #include <opm/simulators/linalg/gpubridge/WellContributions.hpp>
 #endif
 
+#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
 #include <opm/simulators/linalg/istlsparsematrixadapter.hh>
 #include <opm/simulators/linalg/matrixblock.hh>
 #include <opm/simulators/linalg/SmallDenseMatrixUtils.hpp>
@@ -247,6 +248,90 @@ extract(const int numStaticWellEq,
                            colIndices.data(), nnzValues.data(), duneB_.nonzeroes());
 }
 #endif
+
+template<class Scalar, int numEq>
+std::tuple<std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
+           std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
+           std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>>
+StandardWellEquations<Scalar,numEq>::
+extractGPUIstl(const int numStaticWellEq) const
+{
+    // For matrices B and C, we need to create CSR format
+    // Create the data structures needed for GpuSparseMatrix
+
+    // Common row indices structure for B and C (1x1 block matrix with nonzeroes for each perforation)
+    std::vector<int> rowIndices(2, 0); // Start with [0, 0]
+    rowIndices[1] = duneB_.nonzeroes(); // Number of nonzeros
+
+    // Extract data for matrix B
+    std::vector<int> BcolIndices;
+    std::vector<Scalar> BValues;
+    BcolIndices.reserve(duneB_.nonzeroes());
+    BValues.reserve(duneB_.nonzeroes() * numStaticWellEq * numEq);
+
+    for (auto colB = duneB_[0].begin(), endB = duneB_[0].end(); colB != endB; ++colB) {
+        BcolIndices.emplace_back(cells_[colB.index()]);
+        for (int i = 0; i < numStaticWellEq; ++i) {
+            for (int j = 0; j < numEq; ++j) {
+                BValues.emplace_back((*colB)[i][j]);
+            }
+        }
+    }
+
+    // Extract data for matrix C
+    std::vector<int> CcolIndices;
+    std::vector<Scalar> CValues;
+    CcolIndices.reserve(duneC_.nonzeroes());
+    CValues.reserve(duneC_.nonzeroes() * numStaticWellEq * numEq);
+
+    for (auto colC = duneC_[0].begin(), endC = duneC_[0].end(); colC != endC; ++colC) {
+        CcolIndices.emplace_back(cells_[colC.index()]);
+        for (int i = 0; i < numStaticWellEq; ++i) {
+            for (int j = 0; j < numEq; ++j) {
+                CValues.emplace_back((*colC)[i][j]);
+            }
+        }
+    }
+
+    // Extract data for matrix invD
+    std::vector<int> DrowIndices = {0, 1}; // 1x1 block matrix with one nonzero block
+    std::vector<int> DcolIndices = {0};    // Single column
+    std::vector<Scalar> DValues;
+    DValues.reserve(numStaticWellEq * numStaticWellEq);
+
+    for (int i = 0; i < numStaticWellEq; ++i) {
+        for (int j = 0; j < numStaticWellEq; ++j) {
+            DValues.emplace_back(invDuneD_[0][0][i][j]);
+        }
+    }
+
+    // Create GPU sparse matrices as unique pointers
+    auto gpuB = std::make_unique<gpuistl::GpuSparseMatrix<Scalar>>(
+        BValues.data(),
+        rowIndices.data(),
+        BcolIndices.data(),
+        duneB_.nonzeroes(),
+        numStaticWellEq * numEq,
+        1);
+
+    auto gpuC = std::make_unique<gpuistl::GpuSparseMatrix<Scalar>>(
+        CValues.data(),
+        rowIndices.data(),
+        CcolIndices.data(),
+        duneC_.nonzeroes(),
+        numStaticWellEq * numEq,
+        1);
+
+    auto gpuInvD = std::make_unique<gpuistl::GpuSparseMatrix<Scalar>>(
+        DValues.data(),
+        DrowIndices.data(),
+        DcolIndices.data(),
+        1,
+        numStaticWellEq * numStaticWellEq,
+        1);
+
+    return std::make_tuple(std::move(gpuB), std::move(gpuC), std::move(gpuInvD));
+}
 
 template<class Scalar, int numEq>
 template<class SparseMatrixAdapter>
