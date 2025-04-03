@@ -70,6 +70,8 @@
 #include <opm/simulators/wells/WellState.hpp>
 #include <opm/simulators/wells/WGState.hpp>
 
+#include <opm/simulators/linalg/gpuistl/GpuWellMatrices.hpp>
+
 #include <cstddef>
 #include <map>
 #include <memory>
@@ -84,6 +86,12 @@ template<class T> class SparseTable;
 #if COMPILE_GPU_BRIDGE
 template<class Scalar> class WellContributions;
 #endif
+
+// Forward declaration for GpuWellOperator
+namespace gpuistl {
+    template <class X, class Y> class GpuWellOperator;
+    template <class Scalar> class GpuWellMatrices;
+}
 
         /// Class for handling the blackoil well model.
         template<typename TypeTag>
@@ -243,6 +251,9 @@ template<class Scalar> class WellContributions;
             void getWellContributions(WellContributions<Scalar>& x) const;
 #endif
 
+            // Method for GPUIstl to get well matrices directly in GPU format
+            void getWellContributionsGPUIstl() const;
+
             // Check if well equations is converged.
             ConvergenceReport getWellConvergence(const std::vector<Scalar>& B_avg, const bool checkWellGroupControls = false) const;
 
@@ -339,6 +350,13 @@ template<class Scalar> class WellContributions;
                 return simulator_.vanguard().compressedIndexForInterior(cartesian_cell_idx);
             }
 
+
+            /// Get the shared GPU well matrices storage
+            std::shared_ptr<gpuistl::GpuWellMatrices<Scalar>> getGpuWellMatrices() const
+            {
+                return gpuWellMatrices_;
+            }
+
             // using the solution x to recover the solution xw for wells and applying
             // xw to update Well State
             void recoverWellSolutionAndUpdateWellState(const BVector& x);
@@ -393,6 +411,10 @@ template<class Scalar> class WellContributions;
             std::map<std::string, Scalar> well_group_thp_calc_;
             std::unique_ptr<RateConverterType> rateConverter_{};
             std::map<std::string, std::unique_ptr<AverageRegionalPressureType>> regionalAveragePressureCalculator_{};
+
+            /// Storage for GPU well matrices
+            mutable std::shared_ptr<gpuistl::GpuWellMatrices<Scalar>> gpuWellMatrices_ =
+                std::make_shared<gpuistl::GpuWellMatrices<Scalar>>();
 
             SimulatorReportSingle last_report_{};
 

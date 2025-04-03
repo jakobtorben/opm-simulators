@@ -416,6 +416,28 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                                     comm_.get());
             }
 
+            simulator_.problem().wellModel().getWellContributionsGPUIstl();
+
+            // Get the GPU well matrices
+            auto wellMatrices = simulator_.problem().wellModel().getGpuWellMatrices();
+
+            // Try to pass the well matrices to the GPU solver if available
+            if (wellMatrices && flexibleSolver_[activeSolverNum_].solver_) {
+#if HAVE_CUDA
+                // If we're using a GPU solver, try to pass the well matrices to it
+                try {
+                    // Try to get a GPU well operator from the solver
+                    auto* gpuWellOp = flexibleSolver_[activeSolverNum_].wellOperator_.get();
+                    if (gpuWellOp) {
+                        gpuWellOp->setWellMatrices(wellMatrices);
+                    }
+
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting well matrices: " << e.what() << std::endl;
+                }
+#endif
+            }
+
             // Solve system.
             Dune::InverseOperatorResult result;
             {
@@ -501,6 +523,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                         flexibleSolver_[activeSolverNum_].wellOperator_ = std::move(wellOp);
                     }
                     else {
+                        // FIXME: Here we set the CPU well operator before the solver adapter and GPU well operator is created
                         auto wellOp = std::make_unique<WellModelOperator>(simulator_.problem().wellModel());
                         flexibleSolver_[activeSolverNum_].wellOperator_ = std::move(wellOp);
                     }
@@ -514,6 +537,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                                                          weightCalculator,
                                                          forceSerial_,
                                                          *comm_);
+                // FIXME: Here we should update the well operator to use the GPU well operator doing something like this:
+                //flexibleSolver_[activeSolverNum_].wellOperator_ = flexibleSolver_[activeSolverNum_].solver_->getWellOperator();
             }
             else
             {

@@ -58,6 +58,9 @@
 #include <opm/simulators/linalg/gpubridge/WellContributions.hpp>
 #endif
 
+#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuWellMatrices.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <iomanip>
@@ -1552,6 +1555,31 @@ namespace Opm {
         }
     }
 #endif
+
+    template<typename TypeTag>
+    void
+    BlackoilWellModel<TypeTag>::
+    getWellContributionsGPUIstl() const
+    {
+        // Clear any previous matrices
+        gpuWellMatrices_->clear();
+
+        for (const auto& well: well_container_) {
+            std::shared_ptr<StandardWell<TypeTag>> derived = std::dynamic_pointer_cast<StandardWell<TypeTag>>(well);
+            if (derived) {
+                // Extract the GPU matrices for this well
+                auto matrices = derived->linSys().extractGPUIstl(derived->numStaticWellEq);
+                gpuWellMatrices_->addWell(std::move(matrices));
+            } else {
+                auto derived_ms = std::dynamic_pointer_cast<MultisegmentWell<TypeTag>>(well);
+                if (derived_ms) {
+                    OPM_THROW(std::logic_error, "MultisegmentWell not yet supported for GPU acceleration");
+                } else {
+                    OPM_THROW(std::logic_error, "Unknown type of well - cannot extract GPU matrices");
+                }
+            }
+        }
+    }
 
     template<typename TypeTag>
     void

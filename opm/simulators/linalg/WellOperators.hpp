@@ -34,6 +34,11 @@
 
 #include <cstddef>
 
+// Forward declarations
+namespace Opm::gpuistl {
+template <class Scalar> class GpuWellMatrices;
+}
+
 namespace Opm {
 
 //=====================================================================
@@ -63,6 +68,13 @@ public:
                                           const bool use_well_weights) const = 0;
     virtual void addWellPressureEquationsStruct(PressureMatrix& jacobian) const = 0;
     virtual int getNumberOfExtraEquations() const = 0;
+
+    // Virtual method for setting GPU well matrices
+    virtual void setWellMatrices(const std::shared_ptr<gpuistl::GpuWellMatrices<field_type>>& wellMatrices)
+    {
+        // Default implementation does nothing
+        (void)wellMatrices; // Avoid unused parameter warning
+    }
 };
 
 template <class WellModel, class X, class Y>

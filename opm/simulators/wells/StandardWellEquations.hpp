@@ -39,6 +39,9 @@ template<class Scalar, int numEq> class StandardWellEquationAccess;
 #if COMPILE_GPU_BRIDGE
 template<class Scalar> class WellContributions;
 #endif
+namespace gpuistl {
+    template<typename T> class GpuSparseMatrix;
+}
 template<class Scalar> class WellInterfaceGeneric;
 template<class Scalar> class WellState;
 
@@ -102,6 +105,13 @@ public:
     void extract(const int numStaticWellEq,
                  WellContributions<Scalar>& wellContribs) const;
 #endif
+    //! \brief Extract well matrices for GPUIstl format.
+    //! \param numStaticWellEq Number of static well equations
+    //! \return A tuple of GpuSparseMatrix objects (B, C, invD)
+    std::tuple<std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
+               std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
+               std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>>
+    extractGPUIstl(const int numStaticWellEq) const;
 
     //! \brief Add the matrices of this well to the sparse matrix adapter.
     template<class SparseMatrixAdapter>
