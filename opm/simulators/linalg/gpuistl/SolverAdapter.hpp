@@ -1,5 +1,6 @@
 /*
   Copyright 2022-2023 SINTEF AS
+  Copyright 2025 Equinor ASA
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -93,13 +94,16 @@ public:
         : Dune::IterativeSolver<X, X>(op, sp, *prec, reduction, maxit, verbose)
         , m_opOnCPUWithMatrix(op)
         , m_matrix(GpuSparseMatrix<real_type>::fromMatrix(op.getmat()))
-        , m_underlyingSolver(constructSolver(prec, reduction, maxit, verbose, comm))
     {
         OPM_ERROR_IF(
             (detail::is_a_well_operator<Operator>::value && !std::is_same_v<Comm, Dune::Amg::SequentialInformation>),
             "Currently we only support well operators in serial for the CUDA/HIP solver. "
             "Use --matrix-add-well-contributions=true. "
             "Using WellModelMatrixAdapter with SolverAdapter in parallel is not well-defined so it will not work well, or at all.");
+        // Setup well operators before creating the underlying solver
+        setupWellOperators();
+        m_underlyingSolver = std::make_unique<UnderlyingSolver<XGPU>>(
+            constructSolver(prec, reduction, maxit, verbose, comm));
     }
 
     virtual void apply(X& x, X& b, double reduction, Dune::InverseOperatorResult& res) override
@@ -117,7 +121,7 @@ public:
         // TODO: [perf] do we need to copy x here?
         m_outputBuffer->copyFromHost(x);
 
-        m_underlyingSolver.apply(*m_outputBuffer, *m_inputBuffer, reduction, res);
+        m_underlyingSolver->apply(*m_outputBuffer, *m_inputBuffer, reduction, res);
 
         // TODO: [perf] do we need to copy b here?
         m_inputBuffer->copyToHost(b);
@@ -128,6 +132,12 @@ public:
         // TODO: [perf] Do we need to update the matrix every time? Probably yes
         m_matrix.updateNonzeroValues(m_opOnCPUWithMatrix.getmat());
 
+        // Try with static_cast instead of dynamic_cast since we KNOW GpuWellOperator inherits from SetableWellOperatorBase
+        auto wellOperator = std::static_pointer_cast<SetableWellOperatorBase>(m_gpuWellOperator);
+        if (wellOperator) {
+            m_wellOperator->setWellMatrices(wellOperator);
+        }
+
         if (!m_inputBuffer) {
             m_inputBuffer.reset(new XGPU(b.dim()));
             m_outputBuffer.reset(new XGPU(x.dim()));
@@ -137,7 +147,7 @@ public:
         // TODO: [perf] do we need to copy x here?
         m_outputBuffer->copyFromHost(x);
 
-        m_underlyingSolver.apply(*m_outputBuffer, *m_inputBuffer, res);
+        m_underlyingSolver->apply(*m_outputBuffer, *m_inputBuffer, res);
 
         // TODO: [perf] do we need to copy b here?
         m_inputBuffer->copyToHost(b);
@@ -148,7 +158,7 @@ private:
     Operator& m_opOnCPUWithMatrix;
     GpuSparseMatrix<real_type> m_matrix;
 
-    UnderlyingSolver<XGPU> m_underlyingSolver;
+    std::unique_ptr<UnderlyingSolver<XGPU>> m_underlyingSolver;
 
     // TODO: Use a std::forward
     // This is the MPI parallel case (general communication object)
@@ -266,33 +276,16 @@ private:
         }
         auto preconditionerOnGPU = precAsHolder->getUnderlyingPreconditioner();
 
-        auto matrixOperator = std::make_shared<Dune::MatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>>(m_matrix);
-
-        // Try to get the well operator from the original operator
-        auto* wellOp = dynamic_cast<const SeqOperatorType*>(&m_opOnCPUWithMatrix);
-
-        // Create our scalar product
+        // Create scalar product
         auto scalarProduct = std::make_shared<Dune::SeqScalarProduct<XGPU>>();
 
-        // Check if we have a well operator
-        if (wellOp) {
-            // Create a shared_ptr to the well operator to ensure it stays alive
-            m_wellOperator = std::shared_ptr<const Opm::LinearOperatorExtra<X, X>>(
-                &wellOp->getWellOperator(),
-                [](const Opm::LinearOperatorExtra<X, X>*) { /* non-owning deleter */ }
-            );
-
-            // Create GPU well operator
-            m_gpuWellOperator = std::make_shared<GpuWellOperator<X, XGPU>>(wellOp->getWellOperator());
-
-            // Create matrix adapter for the GPU
-            m_gpuMatrixOperator = std::make_shared<Opm::WellModelMatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>>(
-                m_matrix, *m_gpuWellOperator);
-
+        // Use well operators if available
+        if (m_gpuMatrixOperator) {
             return UnderlyingSolver<XGPU>(m_gpuMatrixOperator, scalarProduct, preconditionerOnGPU, 
                                           reduction, maxit, verbose);
         } else {
-            // No well operator, use the basic matrix operator
+            // No well operator, create a basic matrix operator
+            auto matrixOperator = std::make_shared<Dune::MatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>>(m_matrix);
             return UnderlyingSolver<XGPU>(matrixOperator, scalarProduct, preconditionerOnGPU, 
                                           reduction, maxit, verbose);
         }
@@ -312,6 +305,29 @@ private:
     {
         if (m_gpuWellOperator) {
             m_gpuWellOperator->setWellMatrices(wellMatrices);
+        }
+    }
+
+    // Set up well operators before creating the underlying solver
+    void setupWellOperators()
+    {
+        // Try to get the well operator from the original operator
+        auto* wellOp = dynamic_cast<const SeqOperatorType*>(&m_opOnCPUWithMatrix);
+        if (wellOp) {
+            // Create a shared_ptr to the well operator to ensure it stays alive
+            m_wellOperator = wellOp->getWellOperator();
+
+            // Create GPU well operator using the stored shared_ptr
+            m_gpuWellOperator = std::make_shared<GpuWellOperator<X, XGPU>>(m_wellOperator);
+
+            // Create matrix adapter for the GPU
+            m_gpuMatrixOperator = std::make_shared<Opm::WellModelMatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>>(
+                m_matrix, m_gpuWellOperator);
+        } else {
+            // No well operator, reset pointers to ensure they're null
+            m_wellOperator.reset();
+            m_gpuWellOperator.reset();
+            m_gpuMatrixOperator.reset();
         }
     }
 };
