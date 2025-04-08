@@ -418,26 +418,6 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
 
             simulator_.problem().wellModel().getWellContributionsGPUIstl();
 
-            // Get the GPU well matrices
-            auto wellMatrices = simulator_.problem().wellModel().getGpuWellMatrices();
-
-            // Try to pass the well matrices to the GPU solver if available
-            if (wellMatrices && flexibleSolver_[activeSolverNum_].solver_) {
-#if HAVE_CUDA
-                // If we're using a GPU solver, try to pass the well matrices to it
-                try {
-                    // Try to get a GPU well operator from the solver
-                    auto* gpuWellOp = flexibleSolver_[activeSolverNum_].wellOperator_.get();
-                    if (gpuWellOp) {
-                        gpuWellOp->setWellMatrices(wellMatrices);
-                    }
-
-                } catch (const std::exception& e) {
-                    std::cerr << "Error setting well matrices: " << e.what() << std::endl;
-                }
-#endif
-            }
-
             // Solve system.
             Dune::InverseOperatorResult result;
             {

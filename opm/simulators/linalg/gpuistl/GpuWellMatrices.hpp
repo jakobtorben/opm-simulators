@@ -1,5 +1,5 @@
 /*
-  Copyright 2025 SINTEF Digital, Mathematics and Cybernetics.
+  Copyright 2025 Equinor ASA.
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -16,16 +16,23 @@
   You should have received a copy of the GNU General Public License
   along with OPM.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 #ifndef OPM_GPU_WELL_MATRICES_HPP
 #define OPM_GPU_WELL_MATRICES_HPP
 
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
 #include <memory>
 #include <vector>
 #include <tuple>
 
 namespace Opm::gpuistl
 {
+
+class GpuWellMatricesBase {
+public:
+    virtual ~GpuWellMatricesBase() = default;
+};
 
 /**
  * @brief Storage class for GPU Well matrices
@@ -36,7 +43,7 @@ namespace Opm::gpuistl
  * @tparam Scalar The scalar type to use (double or float)
  */
 template <class Scalar>
-class GpuWellMatrices {
+class GpuWellMatrices : public GpuWellMatricesBase {
 public:
     /**
      * @brief Tuple type for a well's matrices (B, C, invD)
@@ -52,16 +59,19 @@ public:
     /**
      * @brief Add a well's matrices to the storage
      * @param matrices Tuple of matrices for a well
+     * @param cellIndices Vector of global cell indices for this well's perforations
      */
-    void addWell(MatrixTuple&& matrices) {
+    void addWell(MatrixTuple&& matrices, GpuVector<int>&& cellIndices) {
         wellMatrices_.push_back(std::move(matrices));
+        wellCellIndices_.push_back(std::move(cellIndices));
     }
 
     /**
-     * @brief Clear all stored matrices
+     * @brief Clear all stored matrices and indices
      */
     void clear() {
         wellMatrices_.clear();
+        wellCellIndices_.clear();
     }
 
     /**
@@ -70,6 +80,18 @@ public:
      */
     const std::vector<MatrixTuple>& getMatrices() const {
         return wellMatrices_;
+    }
+
+    /**
+     * @brief Get the cell indices for a specific well
+     * @param wellIndex Index of the well
+     * @return Reference to the vector of cell indices
+     */
+    const GpuVector<int>& getWellCellIndices(size_t wellIndex) const {
+        if (wellIndex >= wellCellIndices_.size()) {
+            throw std::out_of_range("Well index out of range");
+        }
+        return wellCellIndices_[wellIndex];
     }
 
     /**
@@ -91,6 +113,9 @@ public:
 private:
     /** Storage for well matrices */
     std::vector<MatrixTuple> wellMatrices_;
+
+    /** Storage for cell indices for each well */
+    std::vector<GpuVector<int>> wellCellIndices_;
 };
 
 } // namespace Opm::gpuistl

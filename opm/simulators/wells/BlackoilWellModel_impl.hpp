@@ -1569,7 +1569,14 @@ namespace Opm {
             if (derived) {
                 // Extract the GPU matrices for this well
                 auto matrices = derived->linSys().extractGPUIstl(derived->numStaticWellEq);
-                gpuWellMatrices_->addWell(std::move(matrices));
+
+                // Get the indices of the perforations for this well
+                const auto& cells = derived->cells();
+
+                // Create a GPU vector of perforation indices
+                std::vector<int> cellIndicesVec(cells.begin(), cells.end());
+                gpuistl::GpuVector<int> cellIndices(cellIndicesVec);
+                gpuWellMatrices_->addWell(std::move(matrices), std::move(cellIndices));
             } else {
                 auto derived_ms = std::dynamic_pointer_cast<MultisegmentWell<TypeTag>>(well);
                 if (derived_ms) {
