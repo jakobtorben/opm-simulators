@@ -1,5 +1,6 @@
 /*
   Copyright 2022-2023 SINTEF AS
+  Copyright 2025 Equinor ASA
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -377,6 +378,47 @@ public:
         res += std::to_string(v[v.size()-1]);
         return res;
     }
+
+    /**
+     * @brief Creates a new vector containing elements at specified indices
+     *
+     * @param indexSet Vector of indices to select from this vector
+     * @param block_size The size of each block when interpreting indices (default=1)
+     * @return A new GpuVector containing copies of the elements at the specified indices
+     *
+     * @note When block_size > 1, each index i in indexSet refers to elements 
+     *       [i*block_size, (i+1)*block_size-1] in the source vector.
+     */
+    GpuVector<T> createSubset(const GpuVector<int>& indexSet, int block_size = 1) const;
+
+    /**
+     * @brief Writes the values from this vector back to the original vector at the specified indices
+     *
+     * @param original The original vector to write values back to
+     * @param indexSet The indices in the original vector where values should be written
+     * @param block_size The size of each block when interpreting indices (default=1)
+     *
+     * @note This vector must have the same size as indexSet * block_size
+     *
+     * @note When block_size > 1, each index i in indexSet refers to elements 
+     *       [i*block_size, (i+1)*block_size-1] in the destination vector.
+     */
+    void writeSubsetBack(GpuVector<T>& original, const GpuVector<int>& indexSet, int block_size = 1) const;
+
+    /**
+     * @brief Extracts a subset of this vector into an existing vector based on specified indices
+     *
+     * @param indexSet Vector of indices to select from this vector
+     * @param result The output vector to store results (must be correctly sized)
+     * @param block_size The size of each block when interpreting indices (default=1)
+     *
+     * @note When block_size > 1, each index i in indexSet refers to elements
+     *       [i*block_size, (i+1)*block_size-1] in the source vector.
+     *
+     * @note It is the caller's responsibility to ensure result has the correct size
+     *       (indexSet.dim() * block_size). A size check is performed in the function.
+     */
+    void extractSubset(const GpuVector<int>& indexSet, GpuVector<T>& result, int block_size = 1) const;
 
 private:
     T* m_dataOnDevice = nullptr;
