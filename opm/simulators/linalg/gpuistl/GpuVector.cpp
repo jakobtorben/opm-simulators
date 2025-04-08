@@ -1,5 +1,6 @@
 /*
   Copyright 2022-2023 SINTEF AS
+  Copyright 2025 Equinor ASA
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -324,6 +325,72 @@ void
 GpuVector<T>::syncFromRecvBuf(GpuVector<T>& buffer, const GpuVector<int>& indexSet) const
 {
     return detail::syncFromRecvBuf(m_dataOnDevice, buffer.data(), indexSet.dim(), indexSet.data());
+}
+
+template <typename T>
+GpuVector<T>
+GpuVector<T>::createSubset(const GpuVector<int>& indexSet, int block_size) const
+{
+    assertHasElements();
+
+    if (block_size <= 0) {
+        OPM_THROW(std::runtime_error,
+                  fmt::format("Invalid block_size: {}. Must be positive.", block_size));
+    }
+
+    // Create a new vector with size (indexSet.dim() * block_size)
+    GpuVector<T> result(indexSet.dim() * block_size);
+
+    // Call into detail implementation for gather with block size
+    detail::gatherElements(m_dataOnDevice, result.data(), indexSet.data(), indexSet.dim(), block_size);
+
+    return result;
+}
+
+template <typename T>
+void
+GpuVector<T>::extractSubset(const GpuVector<int>& indexSet, GpuVector<T>& result, int block_size) const
+{
+    assertHasElements();
+
+    if (block_size <= 0) {
+        OPM_THROW(std::runtime_error,
+                  fmt::format("Invalid block_size: {}. Must be positive.", block_size));
+    }
+
+    // Check that the result vector has the right size
+    if (result.dim() != indexSet.dim() * block_size) {
+        OPM_THROW(std::runtime_error,
+                  fmt::format("Size mismatch in extractSubset. Result vector has {} elements, but needs {} elements "
+                             "({} indices * {} block size).",
+                             result.dim(), indexSet.dim() * block_size, indexSet.dim(), block_size));
+    }
+
+    // Call into detail implementation for gather with block size
+    detail::gatherElements(m_dataOnDevice, result.data(), indexSet.data(), indexSet.dim(), block_size);
+}
+
+template <typename T>
+void
+GpuVector<T>::writeSubsetBack(GpuVector<T>& original, const GpuVector<int>& indexSet, int block_size) const
+{
+    assertHasElements();
+
+    if (block_size <= 0) {
+        OPM_THROW(std::runtime_error,
+                  fmt::format("Invalid block_size: {}. Must be positive.", block_size));
+    }
+
+    // Check that this vector has the right number of elements for blocked mode
+    if (indexSet.dim() * block_size != dim()) {
+        OPM_THROW(std::runtime_error,
+                  fmt::format("Size mismatch in writeSubsetBack. This vector has {} elements, but needs {} elements "
+                             "({} indices * {} block size).", 
+                             dim(), indexSet.dim() * block_size, indexSet.dim(), block_size));
+    }
+
+    // Call into detail implementation for scatter with block size
+    detail::scatterElements(m_dataOnDevice, original.data(), indexSet.data(), indexSet.dim(), block_size);
 }
 
 template class GpuVector<double>;

@@ -1,5 +1,6 @@
 /*
   Copyright 2022-2023 SINTEF AS
+  Copyright 2025 Equinor ASA
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -61,6 +62,32 @@ template <class T>
 void prepareSendBuf(const T* deviceA, T* buffer, size_t numberOfElements, const int* indices);
 template <class T>
 void syncFromRecvBuf(T* deviceA, T* buffer, size_t numberOfElements, const int* indices);
+
+/**
+ * @brief Gather elements from source vector to destination vector based on indices
+ * @param source Pointer to source data (device memory)
+ * @param dest Pointer to destination data (device memory)
+ * @param indices Array of indices to gather (device memory)
+ * @param numberOfElements Number of elements to gather (size of indices array)
+ * @param blockSize Size of each block of elements (default=1)
+ *
+ * For each index i and block offset b, copies source[indices[i]*blockSize + b] to dest[i*blockSize + b]
+ */
+template <typename T>
+void gatherElements(const T* srcVec, T* dstVec, const int* indices, const int size, int blockSize = 1);
+
+/**
+ * @brief Scatter elements from source vector to destination vector based on indices
+ * @param source Pointer to source data (device memory)
+ * @param dest Pointer to destination data (device memory)
+ * @param indices Array of indices to scatter to (device memory)
+ * @param numberOfElements Number of elements to scatter (size of indices array)
+ * @param blockSize Size of each block of elements (default=1)
+ *
+ * For each index i and block offset b, copies source[i*blockSize + b] to dest[indices[i]*blockSize + b]
+ */
+template <typename T>
+void scatterElements(const T* srcVec, T* dstVec, const int* indices, const int size, int blockSize = 1);
 
 /**
  * @brief Compue the weighted matrix vector product where the matrix is diagonal, the diagonal is a vector, meaning we

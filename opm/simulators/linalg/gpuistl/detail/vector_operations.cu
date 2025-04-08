@@ -1,6 +1,6 @@
 /*
   Copyright 2022-2023 SINTEF AS
-
+  Copyright 2025 Equinor ASA
   This file is part of the Open Porous Media project (OPM).
 
   OPM is free software: you can redistribute it and/or modify
@@ -102,6 +102,38 @@ namespace
             a[indices[globalIndex]] = buffer[globalIndex];
         }
     }
+
+    template <typename T>
+    __global__ void gatherElementsKernel(const T* srcVec, T* dstVec, const int* indices, const int size, const int blockSize)
+    {
+        const auto idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+        if (idx < size * blockSize) {
+            // Calculate which block this element belongs to and its position within the block
+            const int blockIdx = idx / blockSize;
+            const int elemInBlock = idx % blockSize;
+
+            // Gather the element from source to destination
+            const int srcIdx = indices[blockIdx] * blockSize + elemInBlock;
+            dstVec[idx] = srcVec[srcIdx];
+        }
+    }
+
+    template <typename T>
+    __global__ void scatterElementsKernel(const T* srcVec, T* dstVec, const int* indices, const int size, const int blockSize)
+    {
+        const auto idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+        if (idx < size * blockSize) {
+            // Calculate which block this element belongs to and its position within the block
+            const int blockIdx = idx / blockSize;
+            const int elemInBlock = idx % blockSize;
+
+            // Scatter the element from source to destination
+            const int dstIdx = indices[blockIdx] * blockSize + elemInBlock;
+            dstVec[dstIdx] = srcVec[idx];
+        }
+    }
 } // namespace
 
 template <class T>
@@ -179,6 +211,55 @@ syncFromRecvBuf(T* deviceA, T* buffer, size_t numberOfElements, const int* indic
 template void syncFromRecvBuf(double* deviceA, double* buffer, size_t numberOfElements, const int* indices);
 template void syncFromRecvBuf(float* deviceA, float* buffer, size_t numberOfElements, const int* indices);
 template void syncFromRecvBuf(int* deviceA, int* buffer, size_t numberOfElements, const int* indices);
+
+template <typename T>
+void gatherElements(const T* srcVec, T* dstVec, const int* indices, const int size, int blockSize)
+{
+    if (size == 0) {
+        return;
+    }
+
+    // Calculate total number of elements to process
+    int totalElements = size * blockSize;
+
+    // Use existing thread block utilities
+    int threadsPerBlock = getCudaRecomendedThreadBlockSize(gatherElementsKernel<T>);
+    int blocksPerGrid = getNumberOfBlocks(totalElements, threadsPerBlock);
+
+    gatherElementsKernel<<<blocksPerGrid, threadsPerBlock>>>(
+        srcVec, dstVec, indices, size, blockSize);
+
+    OPM_GPU_SAFE_CALL(cudaDeviceSynchronize());
+}
+
+template <typename T>
+void scatterElements(const T* srcVec, T* dstVec, const int* indices, const int size, int blockSize)
+{
+    if (size == 0) {
+        return;
+    }
+
+    // Calculate total number of elements to process
+    int totalElements = size * blockSize;
+
+    // Use existing thread block utilities
+    int threadsPerBlock = getCudaRecomendedThreadBlockSize(scatterElementsKernel<T>);
+    int blocksPerGrid = getNumberOfBlocks(totalElements, threadsPerBlock);
+
+    scatterElementsKernel<<<blocksPerGrid, threadsPerBlock>>>(
+        srcVec, dstVec, indices, size, blockSize);
+
+    OPM_GPU_SAFE_CALL(cudaDeviceSynchronize());
+}
+
+// Explicit template instantiations
+template void gatherElements<double>(const double* srcVec, double* dstVec, const int* indices, const int size, int blockSize);
+template void gatherElements<float>(const float* srcVec, float* dstVec, const int* indices, const int size, int blockSize);
+template void gatherElements<int>(const int* srcVec, int* dstVec, const int* indices, const int size, int blockSize);
+
+template void scatterElements<double>(const double* srcVec, double* dstVec, const int* indices, const int size, int blockSize);
+template void scatterElements<float>(const float* srcVec, float* dstVec, const int* indices, const int size, int blockSize);
+template void scatterElements<int>(const int* srcVec, int* dstVec, const int* indices, const int size, int blockSize);
 
 template <class T>
 void
