@@ -1,6 +1,6 @@
 /*
   Copyright 2016 IRIS AS
-  Copyright 2019, 2020 Equinor ASA
+  Copyright 2019, 2020, 2025 Equinor ASA
   Copyright 2020 SINTEF
 
   This file is part of the Open Porous Media project (OPM).
@@ -35,11 +35,28 @@
 #include <cstddef>
 
 // Forward declarations
-namespace Opm::gpuistl {
+namespace Opm {
+namespace gpuistl {
+class GpuWellMatricesBase;
 template <class Scalar> class GpuWellMatrices;
+}
 }
 
 namespace Opm {
+template <typename T>
+class SetableWellOperator {
+public:
+    using field_type = typename T::field_type;
+
+    virtual void setWellMatrices(const std::shared_ptr<gpuistl::GpuWellMatrices<field_type>>& wellMatrices) = 0;
+    virtual ~SetableWellOperator() = default;
+};
+
+class SetableWellOperatorBase {
+public:
+    virtual ~SetableWellOperatorBase() = default;
+    virtual void setWellMatricesImpl(const std::shared_ptr<Opm::gpuistl::GpuWellMatricesBase>& wellMatrices) = 0;
+};
 
 //=====================================================================
 // Implementation for ISTL-matrix based operators
@@ -69,11 +86,11 @@ public:
     virtual void addWellPressureEquationsStruct(PressureMatrix& jacobian) const = 0;
     virtual int getNumberOfExtraEquations() const = 0;
 
-    // Virtual method for setting GPU well matrices
-    virtual void setWellMatrices(const std::shared_ptr<gpuistl::GpuWellMatrices<field_type>>& wellMatrices)
-    {
+    virtual void setWellMatrices(const std::shared_ptr<SetableWellOperatorBase>& wellOperator) const = 0;
+
+    template <typename XGPU>
+    void setGpuWellMatrices(const std::shared_ptr<SetableWellOperator<XGPU>>& wellOperator) const {
         // Default implementation does nothing
-        (void)wellMatrices; // Avoid unused parameter warning
     }
 };
 
@@ -128,6 +145,14 @@ public:
     Dune::SolverCategory::Category category() const override
     {
         return Dune::SolverCategory::sequential;
+    }
+
+    void setWellMatrices(const std::shared_ptr<SetableWellOperatorBase>& wellOperator) const override
+    {
+        auto wellMatrices = wellMod_.getGpuWellMatrices();
+        if (wellMatrices) {
+            wellOperator->setWellMatricesImpl(wellMatrices);
+        }
     }
 
     void addWellPressureEquations(PressureMatrix& jacobian,
@@ -218,6 +243,11 @@ public:
                                                       domainIndex_);
     }
 
+    // implement setWellMatrices which does nothing
+    void setWellMatrices(const std::shared_ptr<SetableWellOperatorBase>& wellOperator) const override
+    {
+    }
+
 private:
     int domainIndex_ = -1;
 };
@@ -249,8 +279,8 @@ public:
 
     //! constructor: just store a reference to a matrix
     WellModelMatrixAdapter (const M& A,
-                            const LinearOperatorExtra<X, Y>& wellOper)
-        : A_( A ), wellOper_( wellOper )
+                            std::shared_ptr<const LinearOperatorExtra<X, Y>> wellOper)
+        : A_( A ), wellOper_( std::move(wellOper) )
     {}
 
     void apply( const X& x, Y& y ) const override
@@ -259,7 +289,7 @@ public:
       A_.mv(x, y);
 
       // add well model modification to y
-      wellOper_.apply(x, y);
+      wellOper_->apply(x, y);
     }
 
     // y += \alpha * A * x
@@ -269,35 +299,38 @@ public:
       A_.usmv(alpha, x, y);
 
       // add scaled well model modification to y
-      wellOper_.applyscaleadd(alpha, x, y);
+      wellOper_->applyscaleadd(alpha, x, y);
     }
 
     const matrix_type& getmat() const override { return A_; }
 
-    const LinearOperatorExtra<X, Y>& getWellOperator() const { return wellOper_; }
+    std::shared_ptr<const LinearOperatorExtra<X, Y>> getWellOperator() const
+    {
+        return wellOper_;
+    }
 
     void addWellPressureEquations(PressureMatrix& jacobian,
                                   const X& weights,
                                   const bool use_well_weights) const
     {
         OPM_TIMEBLOCK(addWellPressureEquations);
-        wellOper_.addWellPressureEquations(jacobian, weights, use_well_weights);
+        wellOper_->addWellPressureEquations(jacobian, weights, use_well_weights);
     }
 
     void addWellPressureEquationsStruct(PressureMatrix& jacobian) const
     {
         OPM_TIMEBLOCK(addWellPressureEquations);
-        wellOper_.addWellPressureEquationsStruct(jacobian);
+        wellOper_->addWellPressureEquationsStruct(jacobian);
     }
 
     int getNumberOfExtraEquations() const
     {
-        return wellOper_.getNumberOfExtraEquations();
+        return wellOper_->getNumberOfExtraEquations();
     }
 
 protected:
     const matrix_type& A_ ;
-    const LinearOperatorExtra<X, Y>& wellOper_;
+    std::shared_ptr<const LinearOperatorExtra<X, Y>> wellOper_;
 };
 
 /*!
@@ -331,9 +364,9 @@ public:
 
     //! constructor: just store a reference to a matrix
     WellModelGhostLastMatrixAdapter (const M& A,
-                                     const LinearOperatorExtra<X, Y>& wellOper,
+                                     std::shared_ptr<const LinearOperatorExtra<X, Y>> wellOper,
                                      const std::size_t interiorSize )
-        : A_( A ), wellOper_( wellOper ), interiorSize_(interiorSize)
+        : A_( A ), wellOper_( std::move(wellOper) ), interiorSize_(interiorSize)
     {}
 
     void apply(const X& x, Y& y) const override
@@ -348,7 +381,7 @@ public:
         }
 
         // add well model modification to y
-        wellOper_.apply(x, y);
+        wellOper_->apply(x, y);
 
         ghostLastProject(y);
     }
@@ -364,7 +397,7 @@ public:
                 (*col).usmv(alpha, x[col.index()], y[row.index()]);
         }
         // add scaled well model modification to y
-        wellOper_.applyscaleadd(alpha, x, y);
+        wellOper_->applyscaleadd(alpha, x, y);
 
         ghostLastProject(y);
     }
@@ -376,18 +409,18 @@ public:
                                   const bool use_well_weights) const
     {
         OPM_TIMEBLOCK(addWellPressureEquations);
-        wellOper_.addWellPressureEquations(jacobian, weights, use_well_weights);
+        wellOper_->addWellPressureEquations(jacobian, weights, use_well_weights);
     }
 
     void addWellPressureEquationsStruct(PressureMatrix& jacobian) const
     {
         OPM_TIMEBLOCK(addWellPressureEquationsStruct);
-        wellOper_.addWellPressureEquationsStruct(jacobian);
+        wellOper_->addWellPressureEquationsStruct(jacobian);
     }
 
     int getNumberOfExtraEquations() const
     {
-        return wellOper_.getNumberOfExtraEquations();
+        return wellOper_->getNumberOfExtraEquations();
     }
 
 protected:
@@ -399,7 +432,7 @@ protected:
     }
 
     const matrix_type& A_ ;
-    const LinearOperatorExtra<X, Y>& wellOper_;
+    std::shared_ptr<const LinearOperatorExtra<X, Y>> wellOper_;
     std::size_t interiorSize_;
 };
 

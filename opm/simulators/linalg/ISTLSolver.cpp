@@ -121,8 +121,9 @@ void FlexibleSolverInfo<Matrix,Vector,Comm>::create(const Matrix& matrix,
             this->solver_ = std::move(sol);
         } else {
             using ParOperatorType = WellModelGhostLastMatrixAdapter<Matrix, Vector, Vector, true>;
-            auto pop = std::make_unique<ParOperatorType>(matrix, *wellOperator_,
-                                                         interiorCellNum_);
+            auto pop = std::make_unique<ParOperatorType>(matrix,
+                std::shared_ptr<const LinearOperatorExtra<Vector, Vector>>(std::move(wellOperator_)),
+                interiorCellNum_);
             using FlexibleSolverType = Dune::FlexibleSolver<ParOperatorType>;
             auto sol = std::make_unique<FlexibleSolverType>(*pop, *comm, prm,
                                                             weightsCalculator,
@@ -145,7 +146,8 @@ void FlexibleSolverInfo<Matrix,Vector,Comm>::create(const Matrix& matrix,
             this->solver_ = std::move(sol);
         } else {
             using SeqOperatorType = WellModelMatrixAdapter<Matrix, Vector, Vector>;
-            auto sop = std::make_unique<SeqOperatorType>(matrix, *wellOperator_);
+            auto sop = std::make_unique<SeqOperatorType>(matrix,
+                std::shared_ptr<const LinearOperatorExtra<Vector, Vector>>(std::move(wellOperator_)));
             using FlexibleSolverType = Dune::FlexibleSolver<SeqOperatorType>;
             auto sol = std::make_unique<FlexibleSolverType>(*sop, prm,
                                                             weightsCalculator,
