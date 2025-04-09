@@ -422,6 +422,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_convergencereport.cpp
   tests/test_deferredlogger.cpp
   tests/test_dilu.cpp
+  tests/test_dilu_split.cpp
   tests/test_equil.cpp
   tests/test_extractMatrix.cpp
   tests/test_flexiblesolver.cpp
@@ -984,6 +985,7 @@ list (APPEND PUBLIC_HEADER_FILES
   opm/simulators/linalg/OwningBlockPreconditioner.hpp
   opm/simulators/linalg/OwningTwoLevelPreconditioner.hpp
   opm/simulators/linalg/MILU.hpp
+  opm/simulators/linalg/MultithreadDILU.hpp
   opm/simulators/linalg/parallelamgbackend.hh
   opm/simulators/linalg/parallelbasebackend.hh
   opm/simulators/linalg/parallelbicgstabbackend.hh

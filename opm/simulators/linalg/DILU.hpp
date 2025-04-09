@@ -1,6 +1,5 @@
-
 /*
-  Copyright 2022-2023 SINTEF AS
+  Copyright 2022-2024 SINTEF AS
   This file is part of the Open Porous Media project (OPM).
   OPM is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -26,30 +25,22 @@
 #include <dune/common/version.hh>
 #include <dune/istl/bcrsmatrix.hh>
 
-#include <opm/simulators/linalg/GraphColoring.hpp>
-
 #include <cstddef>
-#include <optional>
 #include <vector>
 
-#if HAVE_OPENMP
-#include <omp.h>
-#endif
-
-// TODO: rewrite factory and constructor to keep track of a number of threads variable
 namespace Dune
 {
 
-/*! \brief The OpenMP thread parallelized DILU preconditioner.
- *  \details Safe to run serially without OpenMP. When run in parallel
-             the matrix is assumed to be symmetric.
+/*! \brief The DILU (Diagonal Incomplete LU) preconditioner.
+ *  \details Optimized sequential implementation without multithreading overhead.
+             Use MultithreadDILU for parallel execution.
 
    \tparam M The matrix type to operate on
    \tparam X Type of the update
    \tparam Y Type of the defect
 */
 template <class M, class X, class Y>
-class MultithreadDILU : public PreconditionerWithUpdate<X, Y>
+class DILU : public PreconditionerWithUpdate<X, Y>
 {
 public:
     //! \brief The matrix type the preconditioner is for.
@@ -65,40 +56,10 @@ public:
     /*! \brief Constructor gets all parameters to operate the prec.
        \param A The matrix to operate on.
     */
-    explicit MultithreadDILU(const M& A)
+    explicit DILU(const M& A)
         : A_(A)
     {
         OPM_TIMEBLOCK(prec_construct);
-        // TODO: rewrite so this value is set by an argument to the constructor
-#if HAVE_OPENMP
-        use_multithreading = omp_get_max_threads() > 1;
-#endif
-
-        if (use_multithreading) {
-            A_reordered_.emplace(A_.N(), A_.N(), A_.nonzeroes(), M::row_wise);
-
-            //! Assuming symmetric matrices using a lower triangular coloring to construct
-            //! the levels is sufficient
-            level_sets_ = Opm::getMatrixRowColoring(A_, Opm::ColoringType::LOWER);
-            reordered_to_natural_ = std::vector<std::size_t>(A_.N());
-            natural_to_reorder_ = std::vector<std::size_t>(A_.N());
-            int globCnt = 0;
-            for (const auto& level_set : level_sets_) {
-                for (const auto j : level_set) {
-                    reordered_to_natural_[globCnt] = j;
-                    natural_to_reorder_[j] = globCnt++;
-                }
-            }
-
-            for (auto dst_row_it = A_reordered_->createbegin(); dst_row_it != A_reordered_->createend(); ++dst_row_it) {
-                auto src_row = A_.begin() + reordered_to_natural_[dst_row_it.index()];
-                // For elements in A
-                for (auto elem = src_row->begin(); elem != src_row->end(); elem++) {
-                    dst_row_it.insert(elem.index());
-                }
-            }
-        }
-
         Dinv_.resize(A_.N());
         update();
     }
@@ -110,11 +71,7 @@ public:
     void update() override
     {
         OPM_TIMEBLOCK(prec_update);
-        if (use_multithreading) {
-            parallelUpdate();
-        } else {
-            serialUpdate();
-        }
+        serialUpdate();
     }
 
     /*!
@@ -135,11 +92,7 @@ public:
     void apply(X& v, const Y& d) override
     {
         OPM_TIMEBLOCK(prec_apply);
-        if (use_multithreading) {
-            parallelApply(v, d);
-        } else {
-            serialApply(v, d);
-        }
+        serialApply(v, d);
     }
 
     /*!
@@ -169,19 +122,8 @@ public:
 private:
     //! \brief The matrix we operate on.
     const M& A_;
-    //! \brief Copy of A_ that is reordered to store rows that can be computed simultaneously next to each other to
-    //! increase cache usage when multithreading
-    std::optional<M> A_reordered_;
     //! \brief The inverse of the diagnal matrix
     std::vector<typename M::block_type> Dinv_;
-    //! \brief SparseTable storing each row by level
-    Opm::SparseTable<std::size_t> level_sets_;
-    //! \brief converts from index in reordered structure to index natural ordered structure
-    std::vector<std::size_t> reordered_to_natural_;
-    //! \brief converts from index in natural ordered structure to index reordered strucutre
-    std::vector<std::size_t> natural_to_reorder_;
-    //! \brief Boolean value describing whether or not to use multithreaded version of functions
-    bool use_multithreading{false};
 
     void serialUpdate()
     {
@@ -202,51 +144,6 @@ private:
             }
             Dinv_temp.invert();
             Dinv_[row_i] = Dinv_temp;
-        }
-    }
-
-    void parallelUpdate()
-    {
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
-        for (std::size_t row = 0; row != A_.N(); ++row) {
-            Dinv_[natural_to_reorder_[row]] = A_[row][row];
-        }
-
-        // TODO: is there a better/faster way of copying all values?
-        for (auto dst_row_it = A_reordered_->begin(); dst_row_it != A_reordered_->end(); ++dst_row_it) {
-            auto src_row = A_.begin() + reordered_to_natural_[dst_row_it.index()];
-            for (auto elem = src_row->begin(); elem != src_row->end(); elem++) {
-                (*A_reordered_)[dst_row_it.index()][elem.index()] = *elem;
-            }
-        }
-
-        int level_start_idx = 0;
-        for (int level = 0; level < level_sets_.size(); ++level) {
-            const int num_of_rows_in_level = level_sets_[level].size();
-
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
-            for (int row_idx_in_level = 0; row_idx_in_level < num_of_rows_in_level; ++row_idx_in_level) {
-                auto row = A_reordered_->begin() + level_start_idx + row_idx_in_level;
-                const auto row_i = reordered_to_natural_[row.index()];
-                // auto Dinv_temp = Dinv_[row_i];
-                auto Dinv_temp = Dinv_[level_start_idx + row_idx_in_level];
-                for (auto a_ij = row->begin(); a_ij.index() < row_i; ++a_ij) {
-                    const auto col_j = natural_to_reorder_[a_ij.index()];
-                    const auto a_ji = (*A_reordered_)[col_j].find(row_i);
-                    if (a_ji != (*A_reordered_)[col_j].end()) {
-                        // Dinv_temp -= A[i, j] * d[j] * A[j, i]
-                        Dinv_temp -= (*a_ij) * Dune::FieldMatrix(Dinv_[col_j]) * (*a_ji);
-                    }
-                }
-                Dinv_temp.invert();
-                Dinv_[level_start_idx + row_idx_in_level] = Dinv_temp;
-            }
-
-            level_start_idx += num_of_rows_in_level;
         }
     }
 
@@ -298,64 +195,6 @@ private:
                 // v_i = y_i - Dinv_i*rhs
                 // before update v_i is y_i
                 Dinv_[row_i].mmv(rhs, v[row_i]);
-            }
-        }
-    }
-
-    void parallelApply(X& v, const Y& d)
-    {
-        using Xblock = typename X::block_type;
-        using Yblock = typename Y::block_type;
-        {
-            OPM_TIMEBLOCK(lower_solve);
-            int level_start_idx = 0;
-            for (int level = 0; level < level_sets_.size(); ++level) {
-                const int num_of_rows_in_level = level_sets_[level].size();
-
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
-                for (int row_idx_in_level = 0; row_idx_in_level < num_of_rows_in_level; ++row_idx_in_level) {
-                    auto row = A_reordered_->begin() + level_start_idx + row_idx_in_level;
-                    const auto row_i = reordered_to_natural_[row.index()];
-                    Yblock rhs = d[row_i];
-                    for (auto a_ij = (*row).begin(); a_ij.index() < row_i; ++a_ij) {
-                        // if  A[i][j] != 0
-                        // rhs -= A[i][j]* y[j], where v_j stores y_j
-                        const auto col_j = a_ij.index();
-                        a_ij->mmv(v[col_j], rhs);
-                    }
-                    // y_i = Dinv_i * rhs
-                    // storing y_i in v_i
-                    Dinv_[level_start_idx + row_idx_in_level].mv(rhs, v[row_i]); // (D + L_A)_ii = D_i
-                }
-                level_start_idx += num_of_rows_in_level;
-            }
-        }
-
-        {
-            int level_start_idx = A_.N();
-            //  upper triangular solve: (D + U_A) v = Dy
-            for (int level = level_sets_.size() - 1; level >= 0; --level) {
-                const int num_of_rows_in_level = level_sets_[level].size();
-                level_start_idx -= num_of_rows_in_level;
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
-                for (int row_idx_in_level = num_of_rows_in_level - 1; row_idx_in_level >= 0; --row_idx_in_level) {
-                    auto row = A_reordered_->begin() + level_start_idx + row_idx_in_level;
-                    const auto row_i = reordered_to_natural_[row.index()];
-                    Xblock rhs(0.0);
-                    for (auto a_ij = (*row).beforeEnd(); a_ij.index() > row_i; --a_ij) {
-                        // rhs += A[i][j]*v[j]
-                        const auto col_j = a_ij.index();
-                        a_ij->umv(v[col_j], rhs);
-                    }
-                    // calculate update v = M^-1*d
-                    // v_i = y_i - Dinv_i*rhs
-                    // before update v_i is y_i
-                    Dinv_[level_start_idx + row_idx_in_level].mmv(rhs, v[row_i]);
-                }
             }
         }
     }

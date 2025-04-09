@@ -39,6 +39,7 @@
 #include <opm/simulators/linalg/amgcpr.hh>
 #include <opm/simulators/linalg/ilufirstelement.hh>
 #include <opm/simulators/linalg/matrixblock.hh>
+#include <opm/simulators/linalg/MultithreadDILU.hpp>
 
 #include <dune/common/unused.hh>
 #include <dune/istl/owneroverlapcopy.hh>
@@ -186,6 +187,15 @@ struct StandardPreconditioners {
         });
         F::addCreator("DILU", [](const O& op, const P& prm, const std::function<V()>&, std::size_t, const C& comm) {
             DUNE_UNUSED_PARAMETER(prm);
+            // Keep using MultithreadDILU for backward compatibility
+            return wrapBlockPreconditioner<MultithreadDILU<M, V, V>>(comm, op.getmat());
+        });
+        F::addCreator("SerialDILU", [](const O& op, const P& prm, const std::function<V()>&, std::size_t, const C& comm) {
+            DUNE_UNUSED_PARAMETER(prm);
+            return wrapBlockPreconditioner<DILU<M, V, V>>(comm, op.getmat());
+        });
+        F::addCreator("MultithreadDILU", [](const O& op, const P& prm, const std::function<V()>&, std::size_t, const C& comm) {
+            DUNE_UNUSED_PARAMETER(prm);
             return wrapBlockPreconditioner<MultithreadDILU<M, V, V>>(comm, op.getmat());
         });
         F::addCreator("Jac", [](const O& op, const P& prm, const std::function<V()>&, std::size_t, const C& comm) {
@@ -267,6 +277,22 @@ struct StandardPreconditioners {
                     return prec;
                 } else if (smoother == "ILUn") {
                     using SeqSmoother = SeqILU<M, V, V>;
+                    using Smoother = Dune::BlockPreconditioner<V, V, C, SeqSmoother>;
+                    using SmootherArgs = typename Dune::Amg::SmootherTraits<Smoother>::Arguments;
+                    SmootherArgs sargs;
+                    auto crit = AMGHelper<O, C, M, V>::criterion(prm);
+                    PrecPtr prec = std::make_shared<Dune::Amg::AMGCPR<O, V, Smoother, C>>(op, crit, sargs, comm);
+                    return prec;
+                } else if (smoother == "SerialDILU") {
+                    using SeqSmoother = Dune::DILU<M, V, V>;
+                    using Smoother = Dune::BlockPreconditioner<V, V, C, SeqSmoother>;
+                    using SmootherArgs = typename Dune::Amg::SmootherTraits<Smoother>::Arguments;
+                    SmootherArgs sargs;
+                    auto crit = AMGHelper<O, C, M, V>::criterion(prm);
+                    PrecPtr prec = std::make_shared<Dune::Amg::AMGCPR<O, V, Smoother, C>>(op, crit, sargs, comm);
+                    return prec;
+                } else if (smoother == "MultithreadDILU") {
+                    using SeqSmoother = Dune::MultithreadDILU<M, V, V>;
                     using Smoother = Dune::BlockPreconditioner<V, V, C, SeqSmoother>;
                     using SmootherArgs = typename Dune::Amg::SmootherTraits<Smoother>::Arguments;
                     SmootherArgs sargs;
@@ -468,6 +494,14 @@ struct StandardPreconditioners<Operator, Dune::Amg::SequentialInformation> {
             DUNE_UNUSED_PARAMETER(prm);
             return std::make_shared<MultithreadDILU<M, V, V>>(op.getmat());
         });
+        F::addCreator("SerialDILU", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            DUNE_UNUSED_PARAMETER(prm);
+            return std::make_shared<DILU<M, V, V>>(op.getmat());
+        });
+        F::addCreator("MultithreadDILU", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            DUNE_UNUSED_PARAMETER(prm);
+            return std::make_shared<MultithreadDILU<M, V, V>>(op.getmat());
+        });
         F::addCreator("Jac", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
             const int n = prm.get<int>("repeats", 1);
             const double w = prm.get<double>("relaxation", 1.0);
@@ -580,7 +614,7 @@ struct StandardPreconditioners<Operator, Dune::Amg::SequentialInformation> {
         if constexpr (std::is_same_v<O, WellModelMatrixAdapter<M, V, V>>) {
             F::addCreator(
                 "cprw",
-                [](const O& op, const P& prm, const std::function<V()>& weightsCalculator, std::size_t pressureIndex) {
+                [](const O& op, const P& prm, const std::function<V()> weightsCalculator, std::size_t pressureIndex) {
                     if (pressureIndex == std::numeric_limits<std::size_t>::max()) {
                         OPM_THROW(std::logic_error, "Pressure index out of bounds. It needs to specified for CPR");
                     }
