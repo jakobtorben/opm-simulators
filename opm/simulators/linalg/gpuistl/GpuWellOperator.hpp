@@ -52,9 +52,6 @@ public:
     explicit GpuWellOperator(const std::shared_ptr<const WellOperatorCPU>& wellOpCPU)
         : wellOpCPU_ptr_(wellOpCPU)
     {
-        // Default to CPU fallback for now
-        // When a real GPU implementation is available, this can be enabled
-        useGPUImpl_ = false;
     }
 
     /**
@@ -69,80 +66,13 @@ public:
     {
         // Store the reference to the matrices storage
         wellMatrices_ = wellMatrices;
-
-        // If we have matrices, use the GPU implementation
-        useGPUImpl_ = wellMatrices_ && !wellMatrices_->empty();
     }
 
     // No-op implementation of the pure virtual method from LinearOperatorExtra
     void setWellMatrices(const std::shared_ptr<Opm::SetableWellOperatorBase>& wellOperator) const override {
     }
 
-    void apply(const XGPU& x, XGPU& y) const override {
-        if (useGPUImpl_) {
-            applyGPU(x, y);
-        } else {
-            applyCPUFallback(x, y);
-        }
-    }
-
-    void applyscaleadd(field_type alpha, const XGPU& x, XGPU& y) const override {
-        if (useGPUImpl_) {
-            XGPU scaleAddRes_(y.dim());
-
-            scaleAddRes_ = 0.0;
-            // scaleAddRes_  = - C D^-1 B x
-            applyGPU(x, scaleAddRes_);
-            // Ax = Ax + alpha * scaleAddRes_
-            y.axpy(alpha, scaleAddRes_);
-        } else {
-            // CPU fallback
-            X x_cpu(x.dim() / block_size);
-            X y_cpu(y.dim() / block_size);
-            x.copyToHost(x_cpu);
-            y.copyToHost(y_cpu);
-            wellOpCPU_ptr_->applyscaleadd(alpha, x_cpu, y_cpu);
-            y.copyFromHost(y_cpu);
-        }
-    }
-
-    Dune::SolverCategory::Category category() const override {
-        return wellOpCPU_ptr_->category();
-    }
-
-    void addWellPressureEquations(PressureMatrix& jacobian,
-                                 const XGPU& weights,
-                                 const bool use_well_weights) const override {
-        // CPU fallback for now
-        X weights_cpu(weights.dim() / block_size);
-        weights.copyToHost(weights_cpu);
-        wellOpCPU_ptr_->addWellPressureEquations(jacobian, weights_cpu, use_well_weights);
-    }
-
-    void addWellPressureEquationsStruct(PressureMatrix& jacobian) const override {
-        wellOpCPU_ptr_->addWellPressureEquationsStruct(jacobian);
-    }
-
-    int getNumberOfExtraEquations() const override {
-        return wellOpCPU_ptr_->getNumberOfExtraEquations();
-    }
-
-    std::shared_ptr<Opm::LinearOperatorExtra<XGPU, XGPU>> getWellOperator() const {
-        return std::make_shared<GpuWellOperator<X, XGPU>>(*this);
-    }
-
-    std::shared_ptr<Opm::gpuistl::GpuWellMatrices<GpuReal>> getWellMatrices() const {
-        return wellMatrices_;
-    }
-
-    void setWellMatricesImpl(const std::shared_ptr<Opm::gpuistl::GpuWellMatricesBase>& baseMatrices) override {
-        // Cast and use the matrices
-        auto typedMatrices = std::static_pointer_cast<Opm::gpuistl::GpuWellMatrices<GpuReal>>(baseMatrices);
-        this->setWellMatrices(typedMatrices);
-    }
-
-private:
-    void applyGPU(const XGPU& x, XGPU& Ax) const {
+    void apply(const XGPU& x, XGPU& Ax) const {
         // Implementation of y -= (C^T * (D^-1 * (B*x))) on GPU
         if (!wellMatrices_ || wellMatrices_->empty()) {
             // No matrices available, do nothing
@@ -194,18 +124,54 @@ private:
         }
     }
 
-    void applyCPUFallback(const XGPU& x, XGPU& y) const {
-        // CPU implementation (fallback)
-        X x_cpu(x.dim() / block_size);
-        X y_cpu(y.dim() / block_size);
-        x.copyToHost(x_cpu);
-        y.copyToHost(y_cpu);
-        wellOpCPU_ptr_->apply(x_cpu, y_cpu);
-        y.copyFromHost(y_cpu);
+    void applyscaleadd(field_type alpha, const XGPU& x, XGPU& y) const override {
+        XGPU scaleAddRes_(y.dim());
+        scaleAddRes_ = 0.0;
+        // scaleAddRes_  = - C D^-1 B x
+        apply(x, scaleAddRes_);
+        // Ax = Ax + alpha * scaleAddRes_
+        y.axpy(alpha, scaleAddRes_);
     }
 
+    Dune::SolverCategory::Category category() const override {
+        return Dune::SolverCategory::sequential;
+    }
+
+    void addWellPressureEquations(PressureMatrix& jacobian,
+                                 const XGPU& weights,
+                                 const bool use_well_weights) const override {
+        // CPU fallback for now
+        X weights_cpu(weights.dim() / block_size);
+        weights.copyToHost(weights_cpu);
+        wellOpCPU_ptr_->addWellPressureEquations(jacobian, weights_cpu, use_well_weights);
+    }
+
+    void addWellPressureEquationsStruct(PressureMatrix& jacobian) const override {
+        wellOpCPU_ptr_->addWellPressureEquationsStruct(jacobian);
+    }
+
+    int getNumberOfExtraEquations() const override {
+        return wellOpCPU_ptr_->getNumberOfExtraEquations();
+    }
+
+    std::shared_ptr<Opm::LinearOperatorExtra<XGPU, XGPU>> getWellOperator() const {
+        return std::make_shared<GpuWellOperator<X, XGPU>>(*this);
+    }
+
+    std::shared_ptr<Opm::gpuistl::GpuWellMatrices<GpuReal>> getWellMatrices() const {
+        return wellMatrices_;
+    }
+
+    void setWellMatricesImpl(const std::shared_ptr<Opm::gpuistl::GpuWellMatricesBase>& baseMatrices) override {
+        // Cast and use the matrices
+        auto typedMatrices = std::static_pointer_cast<Opm::gpuistl::GpuWellMatrices<GpuReal>>(baseMatrices);
+        this->setWellMatrices(typedMatrices);
+    }
+
+private:
+
+
     const std::shared_ptr<const WellOperatorCPU> wellOpCPU_ptr_;
-    bool useGPUImpl_ = false;
     std::shared_ptr<Opm::gpuistl::GpuWellMatrices<GpuReal>> wellMatrices_;
 };
 
