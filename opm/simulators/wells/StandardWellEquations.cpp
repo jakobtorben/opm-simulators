@@ -28,7 +28,7 @@
 #include <opm/simulators/linalg/gpubridge/WellContributions.hpp>
 #endif
 
-#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuMatrix.hpp>
 #include <opm/simulators/linalg/istlsparsematrixadapter.hh>
 #include <opm/simulators/linalg/matrixblock.hh>
 #include <opm/simulators/linalg/SmallDenseMatrixUtils.hpp>
@@ -250,113 +250,61 @@ extract(const int numStaticWellEq,
 #endif
 
 template<class Scalar, int numEq>
-std::tuple<std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
-           std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
-           std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>>
+std::tuple<std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+           std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+           std::unique_ptr<gpuistl::GpuMatrix<Scalar>>>
 StandardWellEquations<Scalar,numEq>::
 extractGPUIstl(const int numStaticWellEq) const
 {
-    // In the current implementation, we create the matrices in the CSR format with block size 1
-    // Create the data structures needed for GpuSparseMatrix
+    // Converting blocked matrices to dense matrices for the well operations
+    //
+    // Original Blocked Matrix Dimensions:
+    // - B: 1 row × numPerfs columns, with block size (numStaticWellEq × numEq)
+    // - C: 1 row × numPerfs columns, with block size (numStaticWellEq × numEq)
+    // - invD: 1×1 with block size (numStaticWellEq × numStaticWellEq)
+    //
+    // When expanded to non-blocked format:
+    // - B: numStaticWellEq rows × (numPerfs * numEq) columns
+    // - C: numStaticWellEq rows × (numPerfs * numEq) columns
+    // - invD: numStaticWellEq rows × numStaticWellEq columns
 
-    // Extract data for matrix B
-    // For B matrix: numStaticWellEq x numEq blocks, with NNZ = numPerforations
-    std::vector<int> BrowIndices;
-    std::vector<int> BcolIndices;
-    std::vector<Scalar> BValues;
-
-    // Reserve space for all elements in the B matrix
-    BrowIndices.reserve(numStaticWellEq + 1);
-    BcolIndices.reserve(duneB_.nonzeroes() * numStaticWellEq * numEq);
-    BValues.reserve(duneB_.nonzeroes() * numStaticWellEq * numEq);
-
-    // First row index is 0
-    BrowIndices.push_back(0);
-
-    // Add block of numStaticWellEq x numEq for each perforation
-    for (auto colB = duneB_[0].begin(), endB = duneB_[0].end(); colB != endB; ++colB) {
+    const int numPerfs = duneB_.nonzeroes();
+    const int numCols = numPerfs * numEq;
+    std::vector<Scalar> BValues(numStaticWellEq * numCols, 0.0);
+    int perfIdx = 0;
+    for (auto colB = duneB_[0].begin(), endB = duneB_[0].end(); colB != endB; ++colB, ++perfIdx) {
         for (int i = 0; i < numStaticWellEq; ++i) {
             for (int j = 0; j < numEq; ++j) {
-                BcolIndices.push_back(colB.index() * numEq + j);
-                BValues.push_back((*colB)[i][j]);
+                // Map block coordinates to flat matrix coordinates:
+                // Block(0, perfIdx)[i, j] -> flat_matrix[i, perfIdx * numEq + j]
+                BValues[i * numCols + (perfIdx * numEq + j)] = (*colB)[i][j];
             }
-            BrowIndices.push_back(BrowIndices.back() + numEq);
         }
     }
 
-    // Extract data for matrix C
-    // For C matrix: numStaticWellEq x numEq blocks, with NNZ = numPerforations
-    std::vector<int> CrowIndices;
-    std::vector<int> CcolIndices;
-    std::vector<Scalar> CValues;
-
-    // Reserve space for all elements in the C matrix
-    CrowIndices.reserve(numStaticWellEq + 1);
-    CcolIndices.reserve(duneC_.nonzeroes() * numStaticWellEq * numEq);
-    CValues.reserve(duneC_.nonzeroes() * numStaticWellEq * numEq);
-
-    // First row index is 0
-    CrowIndices.push_back(0);
-
-    // Add block of numStaticWellEq x numEq for each perforation
-    for (auto colC = duneC_[0].begin(), endC = duneC_[0].end(); colC != endC; ++colC) {
+    std::vector<Scalar> CValues(numStaticWellEq * numCols, 0.0);
+    perfIdx = 0;
+    for (auto colC = duneC_[0].begin(), endC = duneC_[0].end(); colC != endC; ++colC, ++perfIdx) {
         for (int i = 0; i < numStaticWellEq; ++i) {
             for (int j = 0; j < numEq; ++j) {
-                CcolIndices.push_back(colC.index() * numEq + j);
-                CValues.push_back((*colC)[i][j]);
+                // Map block coordinates to flat matrix coordinates:
+                // Block(0, perfIdx)[i, j] -> flat_matrix[i, perfIdx * numEq + j]
+                CValues[i * numCols + (perfIdx * numEq + j)] = (*colC)[i][j];
             }
-            CrowIndices.push_back(CrowIndices.back() + numEq);
         }
     }
 
-    // Extract data for matrix invD
-    // For D matrix: numStaticWellEq x numStaticWellEq blocks
-    // We'll create a matrix with numStaticWellEq rows and columns
-    std::vector<int> DrowIndices;
-    std::vector<int> DcolIndices;
-    std::vector<Scalar> DValues;
-
-    // Reserve space for all elements in the D matrix
-    DrowIndices.reserve(numStaticWellEq + 1);
-    DcolIndices.reserve(numStaticWellEq * numStaticWellEq);
-    DValues.reserve(numStaticWellEq * numStaticWellEq);
-
-    // First row index is 0
-    DrowIndices.push_back(0);
-
-    // Add single block of numStaticWellEq x numStaticWellEq
+    std::vector<Scalar> DValues(numStaticWellEq * numStaticWellEq);
     for (int i = 0; i < numStaticWellEq; ++i) {
         for (int j = 0; j < numStaticWellEq; ++j) {
-            DcolIndices.push_back(j);
-            DValues.push_back(invDuneD_[0][0][i][j]);
+            DValues[i * numStaticWellEq + j] = invDuneD_[0][0][i][j];
         }
-        DrowIndices.push_back(DrowIndices.back() + numStaticWellEq);
     }
 
-    // Create GPU sparse matrices as unique pointers with block size 1
-    auto gpuB = std::make_unique<gpuistl::GpuSparseMatrix<Scalar>>(
-        BValues.data(),
-        BrowIndices.data(),
-        BcolIndices.data(),
-        BValues.size(),
-        1,  // Block size is 1 (non-blocked matrix)
-        duneB_.nonzeroes()*numStaticWellEq);  // Number of rows
-
-    auto gpuC = std::make_unique<gpuistl::GpuSparseMatrix<Scalar>>(
-        CValues.data(),
-        CrowIndices.data(),
-        CcolIndices.data(),
-        CValues.size(),
-        1,  // Block size is 1 (non-blocked matrix)
-        duneC_.nonzeroes()*numStaticWellEq);  // Number of rows
-
-    auto gpuInvD = std::make_unique<gpuistl::GpuSparseMatrix<Scalar>>(
-        DValues.data(),
-        DrowIndices.data(),
-        DcolIndices.data(),
-        DValues.size(),
-        1,  // Block size is 1 (non-blocked matrix)
-        numStaticWellEq);  // Number of rows
+    // Create GPU matrices using the row-major data
+    auto gpuB = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numCols, BValues);
+    auto gpuC = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numCols, CValues);
+    auto gpuInvD = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numStaticWellEq, DValues);
 
     return std::make_tuple(std::move(gpuB), std::move(gpuC), std::move(gpuInvD));
 }
