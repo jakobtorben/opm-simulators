@@ -1,5 +1,6 @@
 /*
   Copyright 2022-2023 SINTEF AS
+  Copyright 2025 Equinor ASA
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -171,6 +172,122 @@ cublasNrm2([[maybe_unused]] cublasHandle_t handle,
            [[maybe_unused]] int* result)
 {
     OPM_THROW(std::runtime_error, "norm2 for integer vectors is not implemented yet.");
+
+    // Avoid warning about missing return statement
+    return CUBLAS_STATUS_NOT_SUPPORTED;
+}
+
+// Matrix-vector multiplication: y = alpha*op(A)*x + beta*y
+inline cublasStatus_t
+cublasGemv(cublasHandle_t handle,
+           cublasOperation_t trans,
+           int m,
+           int n,
+           const double* alpha,
+           const double* A,
+           int lda,
+           const double* x,
+           int incx,
+           const double* beta,
+           double* y,
+           int incy)
+{
+    return cublasDgemv(handle, trans, m, n, alpha, A, lda, x, incx, beta, y, incy);
+}
+
+inline cublasStatus_t
+cublasGemv(cublasHandle_t handle,
+           cublasOperation_t trans,
+           int m,
+           int n,
+           const float* alpha,
+           const float* A,
+           int lda,
+           const float* x,
+           int incx,
+           const float* beta,
+           float* y,
+           int incy)
+{
+    return cublasSgemv(handle, trans, m, n, alpha, A, lda, x, incx, beta, y, incy);
+}
+
+inline cublasStatus_t
+cublasGemv([[maybe_unused]] cublasHandle_t handle,
+           [[maybe_unused]] cublasOperation_t trans,
+           [[maybe_unused]] int m,
+           [[maybe_unused]] int n,
+           [[maybe_unused]] const int* alpha,
+           [[maybe_unused]] const int* A,
+           [[maybe_unused]] int lda,
+           [[maybe_unused]] const int* x,
+           [[maybe_unused]] int incx,
+           [[maybe_unused]] const int* beta,
+           [[maybe_unused]] int* y,
+           [[maybe_unused]] int incy)
+{
+    OPM_THROW(std::runtime_error, "Matrix-vector multiplication for integer matrices is not implemented yet.");
+
+    // Avoid warning about missing return statement
+    return CUBLAS_STATUS_NOT_SUPPORTED;
+}
+
+// Matrix-matrix multiplication: C = alpha*op(A)*op(B) + beta*C
+inline cublasStatus_t
+cublasGemm(cublasHandle_t handle,
+           cublasOperation_t transa,
+           cublasOperation_t transb,
+           int m,
+           int n,
+           int k,
+           const double* alpha,
+           const double* A,
+           int lda,
+           const double* B,
+           int ldb,
+           const double* beta,
+           double* C,
+           int ldc)
+{
+    return cublasDgemm(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+}
+
+inline cublasStatus_t
+cublasGemm(cublasHandle_t handle,
+           cublasOperation_t transa,
+           cublasOperation_t transb,
+           int m,
+           int n,
+           int k,
+           const float* alpha,
+           const float* A,
+           int lda,
+           const float* B,
+           int ldb,
+           const float* beta,
+           float* C,
+           int ldc)
+{
+    return cublasSgemm(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+}
+
+inline cublasStatus_t
+cublasGemm([[maybe_unused]] cublasHandle_t handle,
+           [[maybe_unused]] cublasOperation_t transa,
+           [[maybe_unused]] cublasOperation_t transb,
+           [[maybe_unused]] int m,
+           [[maybe_unused]] int n,
+           [[maybe_unused]] int k,
+           [[maybe_unused]] const int* alpha,
+           [[maybe_unused]] const int* A,
+           [[maybe_unused]] int lda,
+           [[maybe_unused]] const int* B,
+           [[maybe_unused]] int ldb,
+           [[maybe_unused]] const int* beta,
+           [[maybe_unused]] int* C,
+           [[maybe_unused]] int ldc)
+{
+    OPM_THROW(std::runtime_error, "Matrix-matrix multiplication for integer matrices is not implemented yet.");
 
     // Avoid warning about missing return statement
     return CUBLAS_STATUS_NOT_SUPPORTED;
