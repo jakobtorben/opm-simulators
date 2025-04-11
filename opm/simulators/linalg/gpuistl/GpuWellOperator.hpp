@@ -26,9 +26,6 @@
 #include <opm/simulators/wells/WellInterface.hpp>
 
 #include <memory>
-#include <vector>
-#include <iostream>
-#include <typeinfo>
 
 namespace Opm::gpuistl {
 class GpuWellMatricesBase;
@@ -91,10 +88,13 @@ public:
 
     void applyscaleadd(field_type alpha, const XGPU& x, XGPU& y) const override {
         if (useGPUImpl_) {
-            // Apply on GPU with scaling
-            XGPU temp(y.dim());
-            applyGPU(x, temp);
-            y.axpy(alpha, temp); // y += alpha * temp
+            XGPU scaleAddRes_(y.dim());
+
+            scaleAddRes_ = 0.0;
+            // scaleAddRes_  = - C D^-1 B x
+            applyGPU(x, scaleAddRes_);
+            // Ax = Ax + alpha * scaleAddRes_
+            y.axpy(alpha, scaleAddRes_);
         } else {
             // CPU fallback
             X x_cpu(x.dim() / block_size);
@@ -142,7 +142,7 @@ public:
     }
 
 private:
-    void applyGPU(const XGPU& x, XGPU& y) const {
+    void applyGPU(const XGPU& x, XGPU& Ax) const {
         // Implementation of y -= (C^T * (D^-1 * (B*x))) on GPU
         if (!wellMatrices_ || wellMatrices_->empty()) {
             // No matrices available, do nothing
@@ -153,6 +153,11 @@ private:
         const auto& matrices = wellMatrices_->getMatrices();
 
         for (size_t i = 0; i < matrices.size(); ++i) {
+
+            if (wellMatrices_->shouldSkip(i)) {
+                continue;
+            }
+
             const auto& well_matrices = matrices[i];
             // Extract matrices for this well
             const auto& B = std::get<0>(well_matrices);  // B matrix
@@ -161,44 +166,31 @@ private:
             // Get the cell indices for this well
             const auto& cellIndices = wellMatrices_->getWellCellIndices(i);
 
+            // Define the number of perforations and static well equations based on the matrix dimensions
+            const auto numPerfs = cellIndices.dim();
+            const auto numStaticWellEq = B->rows();
+
+            // TODO: [perf] Don't reallocate the vectors for every apply
+
             // Create subset vectors for the perforated cells
             XGPU x_local = x.createSubset(cellIndices, block_size);
-            XGPU result_local(cellIndices.dim() * block_size);
+            XGPU Ax_local = Ax.createSubset(cellIndices, block_size);
 
-            // Define the number of static well equations based on the matrix dimensions
-            const int numStaticWellEq = B->N();  // Get the actual number of rows in B
-
-            // Note that GpuSparseMatrix used here is not really appropriate here, given that it:
-            // 1. does not support non-square blocks.
-            // 2. does not support non-square matrices at all.
-            // 3. does not support block size = 1.
-            // In the current implementation, B, C, and invD are implemented
-            // as non-blocked matrices, but given the constraints above this is not expected to work yet.
-            // In the local representation of the well equations, the matrices are actually not
-            // sparse, so we should probably not use the GpuSparseMatrix class.
-
-            // Matrix dimensions:
-            // B matrix: NNZ = numPerforations, block_size = (numStaticWellEq x numEq)
-            // C^T matrix: NNZ = numPerforations, block_size = (numStaticWellEq x numEq)
-            // invD matrix: NNZ = 1, block_size = (numStaticWellEq x numStaticWellEq)
-
-            // Draft implementation to test the approach:
-            // Needs to be fixed in the final implementation, to do the correct operations,
-            // check the dimensions, and implement the inverse of D solve.
-
-            // 1. Compute B*x_local (well equations applied to perforated cells)
-            XGPU temp_Bx(numStaticWellEq);
-            B->mv(x_local, temp_Bx);
+            // Compute Ax -= C^T * (D^-1 * (B*x)) for this well:
+            // 1. Compute B*x_local
+            XGPU Bx(numStaticWellEq);
+            B->mv(x_local, Bx);
 
             // 2. Compute D^-1 * (B*x)
-            XGPU temp_invDBx(numStaticWellEq);
-            invD->mv(temp_Bx, temp_invDBx);
+            // This applies the inverted well diagonal matrix
+            XGPU invDBx(numStaticWellEq);
+            invD->mv(Bx, invDBx);
 
-            // 3. For C^T * (D^-1 * (B*x))
-            C->mv(temp_invDBx, result_local);
+            // Ax = Ax - duneC_^T * invDBx
+            C->mmtv(invDBx, Ax_local);
 
-            // 4. Subtract from y only at the perforated cell locations
-            y.axpy(-1.0, result_local);
+            // Write Ax_local to Ax at the perforation locations
+            Ax_local.writeSubsetBack(Ax, cellIndices, block_size);
         }
     }
 
