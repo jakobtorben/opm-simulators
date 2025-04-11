@@ -503,7 +503,6 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                         flexibleSolver_[activeSolverNum_].wellOperator_ = std::move(wellOp);
                     }
                     else {
-                        // FIXME: Here we set the CPU well operator before the solver adapter and GPU well operator is created
                         auto wellOp = std::make_unique<WellModelOperator>(simulator_.problem().wellModel());
                         flexibleSolver_[activeSolverNum_].wellOperator_ = std::move(wellOp);
                     }
@@ -517,8 +516,6 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                                                          weightCalculator,
                                                          forceSerial_,
                                                          comm_.get());
-                // FIXME: Here we should update the well operator to use the GPU well operator doing something like this:
-                //flexibleSolver_[activeSolverNum_].wellOperator_ = flexibleSolver_[activeSolverNum_].solver_->getWellOperator();
             }
             else
             {
