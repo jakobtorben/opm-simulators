@@ -20,7 +20,7 @@
 #ifndef OPM_GPU_WELL_MATRICES_HPP
 #define OPM_GPU_WELL_MATRICES_HPP
 
-#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuMatrix.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
 #include <memory>
 #include <vector>
@@ -52,18 +52,20 @@ public:
      * C - Reservoir-to-well matrix
      * invD - Inverted well diagonal matrix
      */
-    using MatrixTuple = std::tuple<std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
-                                 std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>,
-                                 std::unique_ptr<gpuistl::GpuSparseMatrix<Scalar>>>;
+    using MatrixTuple = std::tuple<std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+                                 std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+                                 std::unique_ptr<gpuistl::GpuMatrix<Scalar>>>;
 
     /**
      * @brief Add a well's matrices to the storage
      * @param matrices Tuple of matrices for a well
      * @param cellIndices Vector of global cell indices for this well's perforations
+     * @param should_skip Whether to skip this well
      */
-    void addWell(MatrixTuple&& matrices, GpuVector<int>&& cellIndices) {
+    void addWell(MatrixTuple&& matrices, GpuVector<int>&& cellIndices, bool should_skip) {
         wellMatrices_.push_back(std::move(matrices));
         wellCellIndices_.push_back(std::move(cellIndices));
+        should_skip_.push_back(should_skip);
     }
 
     /**
@@ -95,6 +97,18 @@ public:
     }
 
     /**
+     * @brief Get the skip flag for a specific well
+     * @param wellIndex Index of the well
+     * @return True if the well should be skipped
+     */
+    bool shouldSkip(size_t wellIndex) const {
+        if (wellIndex >= should_skip_.size()) {
+            throw std::out_of_range("Well index out of range");
+        }
+        return should_skip_[wellIndex];
+    }
+
+    /**
      * @brief Check if there are any matrices stored
      * @return True if no wells are stored
      */
@@ -116,6 +130,9 @@ private:
 
     /** Storage for cell indices for each well */
     std::vector<GpuVector<int>> wellCellIndices_;
+
+    /** Storage for whether to skip this well */
+    std::vector<bool> should_skip_;
 };
 
 } // namespace Opm::gpuistl

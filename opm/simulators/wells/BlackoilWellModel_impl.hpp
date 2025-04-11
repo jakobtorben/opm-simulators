@@ -58,7 +58,7 @@
 #include <opm/simulators/linalg/gpubridge/WellContributions.hpp>
 #endif
 
-#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuMatrix.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuWellMatrices.hpp>
 
 #include <algorithm>
@@ -1582,10 +1582,12 @@ namespace Opm {
                 // Get the indices of the perforations for this well
                 const auto& cells = derived->cells();
 
+                bool should_skip = !derived->isOperableAndSolvable() && !derived->wellIsStopped();
+
                 // Create a GPU vector of perforation indices
                 std::vector<int> cellIndicesVec(cells.begin(), cells.end());
                 gpuistl::GpuVector<int> cellIndices(cellIndicesVec);
-                gpuWellMatrices_->addWell(std::move(matrices), std::move(cellIndices));
+                gpuWellMatrices_->addWell(std::move(matrices), std::move(cellIndices), should_skip);
             } else {
                 auto derived_ms = std::dynamic_pointer_cast<MultisegmentWell<TypeTag>>(well);
                 if (derived_ms) {
