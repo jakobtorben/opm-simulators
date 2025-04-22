@@ -31,6 +31,7 @@
 #include <opm/simulators/linalg/FlowLinearSolverParameters.hpp>
 #include <opm/simulators/linalg/OwningBlockPreconditioner.hpp>
 #include <opm/simulators/linalg/OwningTwoLevelPreconditioner.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuOwningTwoLevelPreconditioner.hpp>
 #include <opm/simulators/linalg/ParallelOverlappingILU0.hpp>
 #include <opm/simulators/linalg/PressureBhpTransferPolicy.hpp>
 #include <opm/simulators/linalg/PressureTransferPolicy.hpp>
@@ -616,6 +617,19 @@ struct StandardPreconditioners<Operator, Dune::Amg::SequentialInformation> {
             });
 
 #if HAVE_CUDA
+         F::addCreator("cpr_gpu", [](const O& op, const P& prm, const std::function<V()>& weightsCalculator, std::size_t pressureIndex) {
+            if (pressureIndex == std::numeric_limits<std::size_t>::max()) {
+                OPM_THROW(std::logic_error, "Pressure index out of bounds. It needs to specified for CPR");
+            }
+            using Scalar = typename V::field_type;
+            using GpuVector = gpuistl::GpuVector<Scalar>;
+            using LevelTransferPolicy = PressureTransferPolicy<O, Dune::Amg::SequentialInformation, Scalar, false>;
+
+            using GpuPrecType = GpuOwningTwoLevelPreconditioner<O, GpuVector, LevelTransferPolicy, V>;
+            auto gpuPrec = std::make_shared<GpuPrecType>(op, prm, weightsCalculator, pressureIndex);
+            return std::make_shared<gpuistl::PreconditionerAdapter<V, V, GpuPrecType>>(gpuPrec);
+        });
+
         F::addCreator("GPUILU0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
             const double w = prm.get<double>("relaxation", 1.0);
             using field_type = typename V::field_type;
