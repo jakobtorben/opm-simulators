@@ -572,7 +572,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
             // We use lower case as the internal canonical representation of solver names
             std::transform(preconditionerType.begin(), preconditionerType.end(), preconditionerType.begin(), ::tolower);
             if (preconditionerType == "cpr" || preconditionerType == "cprt"
-                || preconditionerType == "cprw" || preconditionerType == "cprwt") {
+                || preconditionerType == "cprw" || preconditionerType == "cprwt"
+                || preconditionerType == "cpr_gpu") {
                 const bool transpose = preconditionerType == "cprt" || preconditionerType == "cprwt";
                 const auto weightsType = prm.get("preconditioner.weight_type"s, "quasiimpes"s);
                 if (weightsType == "quasiimpes") {
