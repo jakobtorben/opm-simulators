@@ -83,22 +83,22 @@ namespace Opm
                                                                                  PressureVectorType<Scalar>,
                                                                                  PressureVectorType<Scalar>>;
         template<class Scalar, class Comm>
-        using ParCoarseOperatorType
-            = Opm::GhostLastMatrixAdapter<PressureMatrixType<Scalar>,
+        using BhpParCoarseOperatorType
+            = Dune::OverlappingSchwarzOperator<PressureMatrixType<Scalar>,
                                            PressureVectorType<Scalar>,
                                            PressureVectorType<Scalar>,
                                            Comm>;
         template<class Scalar, class Comm>
-        using CoarseOperatorType = std::conditional_t<std::is_same<Comm, Dune::Amg::SequentialInformation>::value,
+        using BhpCoarseOperatorType = std::conditional_t<std::is_same<Comm, Dune::Amg::SequentialInformation>::value,
                                                       SeqCoarseOperatorType<Scalar>,
-                                                      ParCoarseOperatorType<Scalar,Comm>>;
+                                                      BhpParCoarseOperatorType<Scalar,Comm>>;
     } // namespace Details
 
     template<class FineOperator, class Communication, class Scalar, bool transpose = false>
-    class PressureBhpTransferPolicy : public Dune::Amg::LevelTransferPolicyCpr<FineOperator, Details::CoarseOperatorType<Scalar,Communication>>
+    class PressureBhpTransferPolicy : public Dune::Amg::LevelTransferPolicyCpr<FineOperator, Details::BhpCoarseOperatorType<Scalar,Communication>>
     {
     public:
-        using CoarseOperator = typename Details::CoarseOperatorType<Scalar,Communication>;
+        using CoarseOperator = typename Details::BhpCoarseOperatorType<Scalar,Communication>;
         using ParentType = Dune::Amg::LevelTransferPolicyCpr<FineOperator, CoarseOperator>;
         using ParallelInformation = Communication;
         using FineVectorType= typename FineOperator::domain_type;
