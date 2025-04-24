@@ -213,6 +213,15 @@ size_t set_interiorSize(size_t N, size_t interiorSize, const Dune::OwnerOverlapC
             }
         }
     }
+        // Verify that all ghost elements (overlap or copy) have indices greater than interior elements
+        for (auto idx = indexSet.begin(); idx != indexSet.end(); ++idx) {
+            const bool isGhostElement = (idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::overlap ||
+                                         idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::copy);
+            const bool hasIndexInInteriorRange = (idx->local().local() <= new_is);
+            if (isGhostElement && hasIndexInInteriorRange) {
+                OPM_THROW(std::runtime_error, "Ghost elements must be ordered after interior elements");
+        }
+    }
     return new_is + 1;
 }
 #endif

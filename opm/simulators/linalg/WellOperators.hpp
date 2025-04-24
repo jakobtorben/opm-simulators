@@ -26,6 +26,7 @@
 #include <dune/istl/operators.hh>
 #include <dune/istl/bcrsmatrix.hh>
 
+#include <opm/common/ErrorMacros.hpp>
 #include <opm/common/TimingMacros.hpp>
 
 #include <opm/simulators/linalg/matrixblock.hh>
@@ -482,6 +483,16 @@ private:
                 if (loc > is) {
                     is = loc;
                 }
+            }
+        }
+
+        // Verify that all ghost elements (overlap or copy) have indices greater than interior elements
+        for (auto idx = indexSet.begin(); idx != indexSet.end(); ++idx) {
+            const bool isGhostElement = (idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::overlap ||
+                                         idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::copy);
+            const bool hasIndexInInteriorRange = (idx->local().local() <= is);
+            if (isGhostElement && hasIndexInInteriorRange) {
+                OPM_THROW(std::runtime_error, "Ghost elements must be ordered after interior elements");
             }
         }
         return is + 1; //size is plus 1 since we start at 0
