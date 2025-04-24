@@ -700,6 +700,35 @@ struct StandardPreconditioners<Operator, Dune::Amg::SequentialInformation> {
             converted->setUnderlyingPreconditioner(adapted);
             return converted;
         });
+
+        using GpuVector = gpuistl::GpuVector<double>;
+        F::template addGpuCreator<GpuVector>("GPUILU0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            const double w = prm.get<double>("relaxation", 1.0);
+            using GpuILU0 = typename gpuistl::GpuSeqILU0<M, GpuVector, GpuVector>;
+            return std::make_shared<GpuILU0>(op.getmat(), w);
+        });
+
+        F::template addGpuCreator<GpuVector>("GPUDILU", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            const bool split_matrix = prm.get<bool>("split_matrix", true);
+            const bool tune_gpu_kernels = prm.get<bool>("tune_gpu_kernels", true);
+            const int mixed_precision_scheme = prm.get<int>("mixed_precision_scheme", 0);
+            using GPUDILU = typename gpuistl::GpuDILU<M, GpuVector, GpuVector>;
+            return std::make_shared<GPUDILU>(op.getmat(), split_matrix, tune_gpu_kernels, mixed_precision_scheme);
+        });
+
+        F::template addGpuCreator<GpuVector>("OPMGPUILU0", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            const bool split_matrix = prm.get<bool>("split_matrix", true);
+            const bool tune_gpu_kernels = prm.get<bool>("tune_gpu_kernels", true);
+            const int mixed_precision_scheme = prm.get<int>("mixed_precision_scheme", 0);
+            using GPUILU0 = typename gpuistl::OpmGpuILU0<M, GpuVector, GpuVector>;
+            return std::make_shared<GPUILU0>(op.getmat(), split_matrix, tune_gpu_kernels, mixed_precision_scheme);
+        });
+
+        F::template addGpuCreator<GpuVector>("GPUJAC", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            const double w = prm.get<double>("relaxation", 1.0);
+            using GPUJac = typename gpuistl::GpuJac<M, GpuVector, GpuVector>;
+            return std::make_shared<GPUJac>(op.getmat(), w);
+        });
 #endif
     }
 };
@@ -770,6 +799,41 @@ PreconditionerFactory<Operator, Comm>::doCreate(const Operator& op,
 }
 
 template <class Operator, class Comm>
+template <class GpuVectorType>
+typename PreconditionerFactory<Operator, Comm>::template GpuPrecPtr<GpuVectorType>
+PreconditionerFactory<Operator, Comm>::doCreateGpu(const Operator& op,
+                                                const PropertyTree& prm,
+                                                const std::function<Vector()> weightsCalculator,
+                                                std::size_t pressureIndex)
+{
+    if (!defAdded_) {
+        StandardPreconditioners<Operator, Comm>::add();
+        defAdded_ = true;
+    }
+
+    const std::string& type = prm.get<std::string>("type", "GPUDILU");
+    const auto& key = type;
+    auto it = gpu_creators_.find(key);
+
+    if (it == gpu_creators_.end()) {
+        std::ostringstream msg;
+        msg << "GPU Preconditioner type " << type << " is not registered in the factory. Available types are: ";
+        for (const auto& prec : gpu_creators_) {
+            msg << prec.first << ' ';
+        }
+        msg << std::endl;
+        OPM_THROW(std::invalid_argument, msg.str());
+    }
+
+    try {
+        auto& creator = std::any_cast<GpuCreator<GpuVectorType>&>(it->second);
+        return creator(op, prm, weightsCalculator, pressureIndex);
+    } catch (const std::bad_any_cast&) {
+        OPM_THROW(std::runtime_error, "Type mismatch in GPU preconditioner creator for " + type);
+    }
+}
+
+template <class Operator, class Comm>
 void
 PreconditionerFactory<Operator, Comm>::doAddCreator(const std::string& type, Creator c)
 {
@@ -781,6 +845,13 @@ void
 PreconditionerFactory<Operator, Comm>::doAddCreator(const std::string& type, ParCreator c)
 {
     parallel_creators_[type] = c;
+}
+
+template <class Operator, class Comm>
+template <class GpuVectorType>
+void PreconditionerFactory<Operator, Comm>::doAddGpuCreator(const std::string& type, GpuCreator<GpuVectorType> c)
+{
+    gpu_creators_[type] = c;
 }
 
 template <class Operator, class Comm>
@@ -816,6 +887,17 @@ PreconditionerFactory<Operator, Comm>::create(const Operator& op,
 }
 
 template <class Operator, class Comm>
+template <class GpuVectorType>
+typename PreconditionerFactory<Operator, Comm>::template GpuPrecPtr<GpuVectorType>
+PreconditionerFactory<Operator, Comm>::createGpu(const Operator& op,
+                                               const PropertyTree& prm,
+                                               const std::function<Vector()>& weightsCalculator,
+                                               std::size_t pressureIndex)
+{
+    return instance().template doCreateGpu<GpuVectorType>(op, prm, weightsCalculator, pressureIndex);
+}
+
+template <class Operator, class Comm>
 void
 PreconditionerFactory<Operator, Comm>::addCreator(const std::string& type, Creator creator)
 {
@@ -827,6 +909,13 @@ void
 PreconditionerFactory<Operator, Comm>::addCreator(const std::string& type, ParCreator creator)
 {
     instance().doAddCreator(type, creator);
+}
+
+template <class Operator, class Comm>
+template <class GpuVectorType>
+void PreconditionerFactory<Operator, Comm>::addGpuCreator(const std::string& type, GpuCreator<GpuVectorType> creator)
+{
+    instance().template doAddGpuCreator<GpuVectorType>(type, creator);
 }
 
 using CommSeq = Dune::Amg::SequentialInformation;

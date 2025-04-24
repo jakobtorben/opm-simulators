@@ -32,6 +32,7 @@
 #include <memory>
 #include <limits>
 #include <string>
+#include <any>
 
 namespace Opm
 {
@@ -76,6 +77,14 @@ public:
     using ParCreator = std::function<PrecPtr(const Operator&, const PropertyTree&,
                                              const std::function<Vector()>&, std::size_t, const Comm&)>;
 
+    /// Template types and functions for GPU preconditioners
+    template <class GpuVectorType>
+    using GpuPrecPtr = std::shared_ptr<Dune::PreconditionerWithUpdate<GpuVectorType, GpuVectorType>>;
+
+    template <class GpuVectorType>
+    using GpuCreator = std::function<GpuPrecPtr<GpuVectorType>(const Operator&, const PropertyTree&,
+                                                              const std::function<Vector()>&, std::size_t)>;
+
     /// Create a new serial preconditioner and return a pointer to it.
     /// \param op    operator to be preconditioned.
     /// \param prm   parameters for the preconditioner, in particular its type.
@@ -84,6 +93,16 @@ public:
     static PrecPtr create(const Operator& op, const PropertyTree& prm,
                           const std::function<Vector()>& weightsCalculator = {},
                           std::size_t pressureIndex = std::numeric_limits<std::size_t>::max());
+
+    /// Create a new GPU preconditioner and return a pointer to it.
+    /// \param op    operator to be preconditioned.
+    /// \param prm   parameters for the preconditioner, in particular its type.
+    /// \param weightsCalculator Calculator for weights used in CPR.
+    /// \return      (smart) pointer to the created GPU preconditioner.
+    template <class GpuVectorType>
+    static GpuPrecPtr<GpuVectorType> createGpu(const Operator& op, const PropertyTree& prm,
+              const std::function<Vector()>& weightsCalculator = {},
+              std::size_t pressureIndex = std::numeric_limits<std::size_t>::max());
 
     /// Create a new parallel preconditioner and return a pointer to it.
     /// \param op    operator to be preconditioned.
@@ -121,6 +140,16 @@ public:
     /// \param creator  a function or lambda creating a preconditioner.
     static void addCreator(const std::string& type, ParCreator creator);
 
+    /// Add a creator for a GPU preconditioner to the PreconditionerFactory.
+    /// After the call, the user may obtain a GPU preconditioner by
+    /// calling createGpu() with the given type string as a parameter
+    /// contained in the property_tree.
+    /// \param type     the type string we want the PreconditionerFactory to
+    ///                 associate with the GPU preconditioner.
+    /// \param creator  a function or lambda creating a GPU preconditioner.
+    template <class GpuVectorType>
+    static void addGpuCreator(const std::string& type, GpuCreator<GpuVectorType> creator);
+
     using CriterionBase
         = Dune::Amg::AggregationCriterion<Dune::Amg::SymmetricDependency<Matrix, Dune::Amg::FirstDiagonal>>;
     using Criterion = Dune::Amg::CoarsenCriterion<CriterionBase>;
@@ -143,16 +172,30 @@ private:
                      const std::function<Vector()> weightsCalculator,
                      std::size_t pressureIndex, const Comm& comm);
 
+    // Actually creates the GPU product object.
+    template <class GpuVectorType>
+    GpuPrecPtr<GpuVectorType> doCreateGpu(const Operator& op, const PropertyTree& prm,
+                               const std::function<Vector()> weightsCalculator,
+                               std::size_t pressureIndex);
+
     // Actually adds the creator.
     void doAddCreator(const std::string& type, Creator c);
 
     // Actually adds the creator.
     void doAddCreator(const std::string& type, ParCreator c);
 
+    // Actually adds the GPU creator.
+    template <class GpuVectorType>
+    void doAddGpuCreator(const std::string& type, GpuCreator<GpuVectorType> c);
+
     // This map contains the whole factory, i.e. all the Creators.
     std::map<std::string, Creator> creators_;
     std::map<std::string, ParCreator> parallel_creators_;
     bool defAdded_= false; //!< True if defaults creators have been added
+
+    // Use type erasure for the GPU creators map since we can't have a template member
+    using AnyGpuCreator = std::any;
+    std::map<std::string, AnyGpuCreator> gpu_creators_;
 };
 
 } // namespace Dune
