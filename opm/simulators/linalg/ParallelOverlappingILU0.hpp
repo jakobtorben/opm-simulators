@@ -274,25 +274,6 @@ public:
                              MILU_VARIANT milu, bool redblack = false,
                              bool reorder_sphere = true);
 
-    /*! \brief Constructor.
-
-      Constructor gets all parameters to operate the prec.
-      \param A The matrix to operate on.
-      \param n ILU fill in level (for testing). This does not work in parallel.
-      \param w The relaxation factor.
-      \param milu The modified ILU variant to use. 0 means traditional ILU. \see MILU_VARIANT.
-      \param interiorSize The number of interior/owner rows in the matrix.
-      \param redblack Whether to use a red-black ordering.
-      \param reorder_sphere If true, we start the reordering at a root node.
-                            The vertices on each layer aound it (same distance) are
-                            ordered consecutivly. If false, we preserver the order of
-                            the vertices with the same color.
-    */
-    ParallelOverlappingILU0 (const Matrix& A,
-                             const ParallelInfo& comm,
-                             const field_type w, MILU_VARIANT milu,
-                             size_type interiorSize, bool redblack = false,
-                             bool reorder_sphere = true);
 
     /*!
       \brief Prepare the preconditioner.
@@ -348,6 +329,7 @@ protected:
     const field_type w_;
     const bool relaxation_;
     size_type interiorSize_;
+    bool ghost_last_ordering_ = false;
     const Matrix* A_;
     int iluIteration_;
     MILU_VARIANT milu_;

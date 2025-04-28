@@ -397,35 +397,11 @@ struct StandardPreconditioners {
         const bool reorder_spheres = prm.get<bool>("reorder_spheres", false);
         // Already a parallel preconditioner. Need to pass comm, but no need to wrap it in a BlockPreconditioner.
         if (ilulevel == 0) {
-            const std::size_t num_interior = interiorIfGhostLast(comm);
-            assert(num_interior <= op.getmat().N());
             return std::make_shared<ParallelOverlappingILU0<M, V, V, Comm>>(
-                op.getmat(), comm, w, MILU_VARIANT::ILU, num_interior, redblack, reorder_spheres);
+                op.getmat(), comm, w, MILU_VARIANT::ILU, redblack, reorder_spheres);
         } else {
             return std::make_shared<ParallelOverlappingILU0<M, V, V, Comm>>(
                 op.getmat(), comm, ilulevel, w, MILU_VARIANT::ILU, redblack, reorder_spheres);
-        }
-    }
-
-    /// Helper method to determine if the local partitioning has the
-    /// K interior cells from [0, K-1] and ghost cells from [K, N-1].
-    /// Returns K if true, otherwise returns N. This is motivated by
-    /// usage in the ParallelOverlappingILU0 preconditioner.
-    static std::size_t interiorIfGhostLast(const Comm& comm)
-    {
-        std::size_t interior_count = 0;
-        std::size_t highest_interior_index = 0;
-        const auto& is = comm.indexSet();
-        for (const auto& ind : is) {
-            if (Comm::OwnerSet::contains(ind.local().attribute())) {
-                ++interior_count;
-                highest_interior_index = std::max(highest_interior_index, ind.local().local());
-            }
-        }
-        if (highest_interior_index + 1 == interior_count) {
-            return interior_count;
-        } else {
-            return is.size();
         }
     }
 };

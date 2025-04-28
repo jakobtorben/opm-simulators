@@ -189,19 +189,19 @@ void convertToCRS(const M& A, CRS& lower, CRS& upper, InvVector& inv)
 }
 
 template <class PI>
-size_t set_interiorSize( [[maybe_unused]] size_t N, size_t interiorSize, [[maybe_unused]] const PI& comm)
+bool has_ghost_last_ordering(size_t N, size_t& interiorSize, [[maybe_unused]] const PI& comm)
 {
-    return interiorSize;
+    interiorSize = N;
+    return false;
 }
 
 #if HAVE_MPI
 template<>
-size_t set_interiorSize(size_t N, size_t interiorSize, const Dune::OwnerOverlapCopyCommunication<int,int>& comm)
+bool has_ghost_last_ordering(size_t N, size_t& interiorSize, const Dune::OwnerOverlapCopyCommunication<int,int>& comm)
 {
-    if (interiorSize<N)
-        return interiorSize;
     auto indexSet = comm.indexSet();
 
+    // Find the maximum index of interior elements
     size_t new_is = 0;
     for (auto idx = indexSet.begin(); idx!=indexSet.end(); ++idx)
     {
@@ -213,16 +213,20 @@ size_t set_interiorSize(size_t N, size_t interiorSize, const Dune::OwnerOverlapC
             }
         }
     }
-        // Verify that all ghost elements (overlap or copy) have indices greater than interior elements
-        for (auto idx = indexSet.begin(); idx != indexSet.end(); ++idx) {
-            const bool isGhostElement = (idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::overlap ||
-                                         idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::copy);
-            const bool hasIndexInInteriorRange = (idx->local().local() <= new_is);
-            if (isGhostElement && hasIndexInInteriorRange) {
-                OPM_THROW(std::runtime_error, "Ghost elements must be ordered after interior elements");
+    // Check if ghosts are after interior elements
+    for (auto idx = indexSet.begin(); idx != indexSet.end(); ++idx) {
+        const bool isGhostElement = (idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::overlap ||
+                                        idx->local().attribute() == Dune::OwnerOverlapCopyAttributeSet::copy);
+        const bool hasIndexInInteriorRange = (idx->local().local() <= new_is);
+        if (isGhostElement && hasIndexInInteriorRange) {
+            interiorSize = N;
+            return false;
         }
     }
-    return new_is + 1;
+
+    // Ghosts are after interior elements, set interiorSize to the number of interior elements
+    interiorSize = new_is + 1;
+    return true;
 }
 #endif
 
@@ -251,7 +255,8 @@ ParallelOverlappingILU0(const Matrix& A,
       A_(&reinterpret_cast<const Matrix&>(A)), iluIteration_(n),
       milu_(milu), redBlack_(redblack), reorderSphere_(reorder_sphere)
 {
-    interiorSize_ = A.N();
+    ghost_last_ordering_ = detail::has_ghost_last_ordering(A.N(), interiorSize_, *comm_);
+    assert(interiorSize_ <= A.N());
     // BlockMatrix is a Subclass of FieldMatrix that just adds
     // methods. Therefore this cast should be safe.
     update();
@@ -271,7 +276,8 @@ ParallelOverlappingILU0(const Matrix& A,
       A_(&reinterpret_cast<const Matrix&>(A)), iluIteration_(n),
       milu_(milu), redBlack_(redblack), reorderSphere_(reorder_sphere)
 {
-    interiorSize_ = A.N();
+    ghost_last_ordering_ = detail::has_ghost_last_ordering(A.N(), interiorSize_, *comm_);
+    assert(interiorSize_ <= A.N());
     // BlockMatrix is a Subclass of FieldMatrix that just adds
     // methods. Therefore this cast should be safe.
     update();
@@ -299,32 +305,11 @@ ParallelOverlappingILU0(const Matrix& A,
       A_(&reinterpret_cast<const Matrix&>(A)), iluIteration_(0),
       milu_(milu), redBlack_(redblack), reorderSphere_(reorder_sphere)
 {
-    interiorSize_ = A.N();
+    ghost_last_ordering_ = detail::has_ghost_last_ordering(A.N(), interiorSize_, *comm_);
+    assert(interiorSize_ <= A.N());
     // BlockMatrix is a Subclass of FieldMatrix that just adds
     // methods. Therefore this cast should be safe.
     update();
-}
-
-template<class Matrix, class Domain, class Range, class ParallelInfoT>
-ParallelOverlappingILU0<Matrix,Domain,Range,ParallelInfoT>::
-ParallelOverlappingILU0(const Matrix& A,
-                        const ParallelInfo& comm,
-                        const field_type w, MILU_VARIANT milu,
-                        size_type interiorSize, bool redblack,
-                        bool reorder_sphere)
-    : lower_(),
-      upper_(),
-      inv_(),
-      comm_(&comm), w_(w),
-      relaxation_( std::abs( w - 1.0 ) > 1e-15 ),
-      interiorSize_(interiorSize),
-      A_(&reinterpret_cast<const Matrix&>(A)), iluIteration_(0),
-      milu_(milu), redBlack_(redblack), reorderSphere_(reorder_sphere)
-{
-    // BlockMatrix is a Subclass of FieldMatrix that just adds
-    // methods. Therefore this cast should be safe.
-    assert(interiorSize <= A_->N());
-    update( );
 }
 
 template<class Matrix, class Domain, class Range, class ParallelInfoT>
@@ -453,12 +438,6 @@ update()
     {
         OPM_TIMEBLOCK(iluDecomposition);
         if (iluIteration_ == 0) {
-
-            if (comm_) {
-                interiorSize_ = detail::set_interiorSize(A_->N(), interiorSize_, *comm_);
-                assert(interiorSize_ <= A_->N());
-            }
-
             // create ILU-0 decomposition
             if (ordering_.empty())
             {
@@ -524,10 +503,10 @@ update()
                                               detail::isPositiveFunctor<typename Matrix::field_type> );
                 break;
             default:
-                if (interiorSize_ == A_->N())
-                    Dune::ILU::blockILU0Decomposition( *ILU_ );
-                else
+                if (ghost_last_ordering_)
                     detail::ghost_last_bilu0_decomposition(*ILU_, interiorSize_);
+                else
+                    Dune::ILU::blockILU0Decomposition( *ILU_ );
                 break;
             }
         }
