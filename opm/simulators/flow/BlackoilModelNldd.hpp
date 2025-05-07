@@ -44,6 +44,7 @@
 #else
 #include <opm/simulators/linalg/ISTLSolver.hpp>
 #endif
+#include <opm/simulators/linalg/ISTLSolverRuntimeOptionProxy.hpp>
 
 #include <opm/simulators/timestepping/ConvergenceReport.hpp>
 #include <opm/simulators/timestepping/SimulatorReport.hpp>
@@ -624,7 +625,7 @@ private:
 
         linsolver.prepare(jac, res);
         model_.linearSolveSetupTime() = perfTimer.stop();
-        linsolver.setResidual(res);
+    linsolver.setResidual(res);
         linsolver.solve(x);
 
         Details::setGlobal(x, domain.cells, global_x);

@@ -369,7 +369,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
             prepare(M.istlMatrix(), b);
         }
 
-        void prepare(const Matrix& M, Vector& b)
+        void prepare(const Matrix& M, Vector& b) override
         {
             OPM_TIMEBLOCK(istlSolverPrepare);
             try {
@@ -395,7 +395,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
             // matrix_ = &M.istlMatrix(); // Must be handled in prepare() instead.
         }
 
-        int getSolveCount() const {
+        int getSolveCount() const override {
             return solveCount_;
         }
 
@@ -439,7 +439,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         /// \return               the solution x
 
         /// \copydoc NewtonIterationBlackoilInterface::iterations
-        int iterations () const { return iterations_; }
+        int iterations () const override { return iterations_; }
 
         /// \copydoc NewtonIterationBlackoilInterface::parallelInformation
         const std::any& parallelInformation() const { return parallelInformation_; }

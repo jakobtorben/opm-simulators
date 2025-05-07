@@ -24,14 +24,25 @@ template <class TypeTag>
 class AbstractISTLSolver
 {
 public:
+
+#if HAVE_MPI
+    using CommunicationType = Dune::OwnerOverlapCopyCommunication<int,int>;
+#else
+    using CommunicationType = Dune::Communication<int>;
+#endif
+
     using SparseMatrixAdapter = GetPropType<TypeTag, Properties::SparseMatrixAdapter>;
     using Vector = GetPropType<TypeTag, Properties::GlobalEqVector>;
+    using Matrix = typename SparseMatrixAdapter::IstlMatrix;
+
     
     virtual void eraseMatrix() = 0;
 
     virtual void setActiveSolver(int num) = 0;
 
     virtual int numAvailableSolvers() const = 0;
+
+    virtual void prepare(const Matrix& M, Vector& b) = 0;
 
     virtual void prepare(const SparseMatrixAdapter& M, Vector& b) = 0;
 
@@ -41,7 +52,16 @@ public:
 
     virtual void setMatrix(const SparseMatrixAdapter& M) = 0;
 
+
     virtual bool solve(Vector& x) = 0;
+
+    virtual int iterations() const = 0;
+
+    virtual const CommunicationType* comm() const = 0;
+
+    virtual int getSolveCount() const = 0;
+
+
 };
 } // namespace Opm
 
