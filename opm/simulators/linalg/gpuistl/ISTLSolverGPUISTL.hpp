@@ -61,62 +61,62 @@ public:
 
     void eraseMatrix() override
     {
-        cpuSolver_->eraseMatrix();
+        cpuSolver_.eraseMatrix();
     }
 
     void setActiveSolver(int num) override
     {
-        cpuSolver_->setActiveSolver(num);
+        cpuSolver_.setActiveSolver(num);
     }
 
     int numAvailableSolvers() const override
     {
-        return cpuSolver_->numAvailableSolvers();
+        return cpuSolver_.numAvailableSolvers();
     }
 
     void prepare(const SparseMatrixAdapter& M, Vector& b) override
     {
-        cpuSolver_->prepare(M, b);
+        cpuSolver_.prepare(M, b);
     }
 
     void prepare(const Matrix& M, Vector& b) override
     {
-        cpuSolver_->prepare(M, b);
+        cpuSolver_.prepare(M, b);
     }
 
     void setResidual(Vector& b) override
     {
-        cpuSolver_->setResidual(b);
+        cpuSolver_.setResidual(b);
     }
 
     void getResidual(Vector& b) const override
     {
-        cpuSolver_->getResidual(b);
+        cpuSolver_.getResidual(b);
     }
 
     void setMatrix(const SparseMatrixAdapter& M) override
     {
-        cpuSolver_->setMatrix(M);
+        cpuSolver_.setMatrix(M);
     }
 
     bool solve(Vector& x) override
     {
-        return cpuSolver_->solve(x);
+        return cpuSolver_.solve(x);
     }
 
     int iterations() const override
     {
-        return cpuSolver_->iterations();
+        return cpuSolver_.iterations();
     }
 
     const CommunicationType* comm() const override
     {
-        return cpuSolver_->comm();
+        return cpuSolver_.comm();
     }
 
     int getSolveCount() const override
     {
-        return cpuSolver_->getSolveCount();
+        return cpuSolver_.getSolveCount();
     }
 
 private:

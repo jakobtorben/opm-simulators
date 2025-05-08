@@ -20,6 +20,7 @@
 #include "opm/simulators/linalg/setupPropertyTree.hpp"
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
+#include <opm/simulators/linalg/gpuistl/ISTLSolverGPUISTL.hpp>
 
 namespace Opm
 {
@@ -129,19 +130,40 @@ public:
 private:
     std::unique_ptr<AbstractISTLSolver<TypeTag>> istlSolver_;
 
-    template <class... Args>
-    void createSolver(const Simulator& simulator, Args&&... args)
+
+    std::string getBackend(const Simulator& simulator) {
+        FlowLinearSolverParameters parameters;
+        return getBackend(simulator, parameters);
+    }
+
+
+    std::string getBackend(const Simulator& simulator, FlowLinearSolverParameters parameters)
     {
-        // TODO: We need to use the parameters sent in in the constructor
-        // instead of the default ones.
-        FlowLinearSolverParameters p;
-        p.init(simulator.vanguard().eclState().getSimulationConfig().useCPR());
-        const auto prm = setupPropertyTree(p,
+        parameters.init(simulator.vanguard().eclState().getSimulationConfig().useCPR());
+        const auto prm = setupPropertyTree(parameters,
                                            Parameters::IsSet<Parameters::LinearSolverMaxIter>(),
                                            Parameters::IsSet<Parameters::LinearSolverReduction>());
         const auto backend = prm.get<std::string>("backend", "cpu");
-        
-        istlSolver_ = std::make_unique<ISTLSolver<TypeTag>>(simulator, std::forward<Args>(args)...);
+        // Convert backend to lowercase for case-insensitive comparison
+        std::string backendLower = backend;
+        std::transform(backendLower.begin(), backendLower.end(), backendLower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+        return backendLower;
+    }
+
+
+    template <class... Args>
+    void createSolver(const Simulator& simulator, Args&&... args)
+    {
+        const auto backend = getBackend(simulator, std::forward<Args>(args)...);
+
+        if (backend == "gpu") {
+            istlSolver_ = std::make_unique<gpuistl::ISTLSolverGPUISTL<TypeTag>>(simulator, std::forward<Args>(args)...);
+        } else if (backend == "cpu") {
+            istlSolver_ = std::make_unique<ISTLSolver<TypeTag>>(simulator, std::forward<Args>(args)...);
+        } else {
+            OPM_THROW(std::invalid_argument, "Unknown backend: " + backend);
+        }
     }
 };
 } // namespace Opm
