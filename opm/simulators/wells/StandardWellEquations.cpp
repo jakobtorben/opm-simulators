@@ -29,6 +29,7 @@
 #endif
 
 #include <opm/simulators/linalg/gpuistl/GpuMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/detail/safe_conversion.hpp>
 #include <opm/simulators/linalg/istlsparsematrixadapter.hh>
 #include <opm/simulators/linalg/matrixblock.hh>
 #include <opm/simulators/linalg/SmallDenseMatrixUtils.hpp>
@@ -37,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <tuple>
 
 namespace Opm
 {
@@ -250,12 +252,18 @@ extract(const int numStaticWellEq,
 #endif
 
 template<class Scalar, int numEq>
-std::tuple<std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
-           std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
-           std::unique_ptr<gpuistl::GpuMatrix<Scalar>>>
+void
 StandardWellEquations<Scalar,numEq>::
-extractGPUIstl(const int numStaticWellEq) const
+extractGPUIstl(const int numStaticWellEq,
+               const std::tuple<std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+                                std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+                                std::unique_ptr<gpuistl::GpuMatrix<Scalar>>>& matrices) const
 {
+    // Get references to the matrices directly
+    auto& gpuB = *std::get<0>(matrices);
+    auto& gpuC = *std::get<1>(matrices);
+    auto& gpuInvD = *std::get<2>(matrices);
+
     // Converting blocked matrices to dense matrices for the well operations
     //
     // Original Blocked Matrix Dimensions:
@@ -270,6 +278,17 @@ extractGPUIstl(const int numStaticWellEq) const
 
     const int numPerfs = duneB_.nonzeroes();
     const int numCols = numPerfs * numEq;
+
+    // Verify that matrices have correct dimensions
+    if (gpuistl::detail::to_int(gpuB.rows()) != numStaticWellEq || gpuistl::detail::to_int(gpuB.cols()) != numCols ||
+        gpuistl::detail::to_int(gpuC.rows()) != numStaticWellEq || gpuistl::detail::to_int(gpuC.cols()) != numCols ||
+        gpuistl::detail::to_int(gpuInvD.rows()) != numStaticWellEq || gpuistl::detail::to_int(gpuInvD.cols()) != numStaticWellEq) {
+        OPM_THROW(std::runtime_error,
+                  "Matrix dimensions mismatch in extractGPUIstl. "
+                  "Expected B and C: (" + std::to_string(numStaticWellEq) + "×" + std::to_string(numCols) + "), "
+                  "invD: (" + std::to_string(numStaticWellEq) + "×" + std::to_string(numStaticWellEq) + ")");
+    }
+
     std::vector<Scalar> BValues(numStaticWellEq * numCols, 0.0);
     int perfIdx = 0;
     for (auto colB = duneB_[0].begin(), endB = duneB_[0].end(); colB != endB; ++colB, ++perfIdx) {
@@ -301,12 +320,9 @@ extractGPUIstl(const int numStaticWellEq) const
         }
     }
 
-    // Create GPU matrices using the row-major data
-    auto gpuB = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numCols, BValues);
-    auto gpuC = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numCols, CValues);
-    auto gpuInvD = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numStaticWellEq, DValues);
-
-    return std::make_tuple(std::move(gpuB), std::move(gpuC), std::move(gpuInvD));
+    gpuB.copyFromHost(BValues.data(), BValues.size());
+    gpuC.copyFromHost(CValues.data(), CValues.size());
+    gpuInvD.copyFromHost(DValues.data(), DValues.size());
 }
 
 template<class Scalar, int numEq>

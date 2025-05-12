@@ -1570,24 +1570,46 @@ namespace Opm {
     BlackoilWellModel<TypeTag>::
     getWellContributionsGPUIstl() const
     {
-        // Clear any previous matrices
-        gpuWellMatrices_->clear();
+
+        // Check which wells are active in this iteration
+        std::set<std::string> active_wells;
 
         for (const auto& well: well_container_) {
             std::shared_ptr<StandardWell<TypeTag>> derived = std::dynamic_pointer_cast<StandardWell<TypeTag>>(well);
             if (derived) {
-                // Extract the GPU matrices for this well
-                auto matrices = derived->linSys().extractGPUIstl(derived->numStaticWellEq);
+                const std::string& well_name = derived->name();
+                active_wells.insert(well_name);
+                bool should_skip = !derived->isOperableAndSolvable() && !derived->wellIsStopped();
 
                 // Get the indices of the perforations for this well
                 const auto& cells = derived->cells();
 
-                bool should_skip = !derived->isOperableAndSolvable() && !derived->wellIsStopped();
+                const int numPerfs = cells.size();
+                const int numStaticWellEq = derived->numStaticWellEq;
+                const int numCols = numPerfs * this->numEq;
+
+                // Check if we already have this well in the matrices storage
+                if (gpuWellMatrices_->hasWell(well_name)) {
+                    // Check if the number of perforations (and thus matrix dimensions) haven't changed
+                    if (gpuWellMatrices_->getWellCellIndices(well_name).dim() == numPerfs) {
+                        const auto& existingMatrices = gpuWellMatrices_->getWellMatrices(well_name);
+                        derived->linSys().extractGPUIstl(numStaticWellEq, existingMatrices);
+                        gpuWellMatrices_->updateWellProperties(well_name, should_skip);
+                        continue;
+                    }
+                }
+
+                // Well does not exist, create new matrices for this well
+                auto B = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numCols);
+                auto C = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numCols);
+                auto invD = std::make_unique<gpuistl::GpuMatrix<Scalar>>(numStaticWellEq, numStaticWellEq);
+                auto matrices = std::make_tuple(std::move(B), std::move(C), std::move(invD));
 
                 // Create a GPU vector of perforation indices
                 std::vector<int> cellIndicesVec(cells.begin(), cells.end());
                 gpuistl::GpuVector<int> cellIndices(cellIndicesVec);
-                gpuWellMatrices_->addWell(std::move(matrices), std::move(cellIndices), should_skip);
+                derived->linSys().extractGPUIstl(numStaticWellEq, matrices);
+                gpuWellMatrices_->addWell(well_name, std::move(matrices), std::move(cellIndices), should_skip);
             } else {
                 auto derived_ms = std::dynamic_pointer_cast<MultisegmentWell<TypeTag>>(well);
                 if (derived_ms) {
@@ -1595,6 +1617,13 @@ namespace Opm {
                 } else {
                     OPM_THROW(std::logic_error, "Unknown type of well - cannot extract GPU matrices");
                 }
+            }
+        }
+
+        // Remove any wells that are not present in the well container
+        for (const auto& well_name : gpuWellMatrices_->getWellNames()) {
+            if (active_wells.find(well_name) == active_wells.end()) {
+                gpuWellMatrices_->removeWell(well_name);
             }
         }
     }
