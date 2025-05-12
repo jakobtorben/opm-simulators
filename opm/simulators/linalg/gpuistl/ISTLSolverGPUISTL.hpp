@@ -20,6 +20,12 @@
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
 
+#include <opm/simulators/linalg/FlexibleSolver.hpp>
+#include <opm/simulators/linalg/FlexibleSolver_impl.hpp>
+
+#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+
+
 namespace Opm::gpuistl
 {
 template <class TypeTag>
@@ -30,6 +36,10 @@ public:
     using Vector = GetPropType<TypeTag, Properties::GlobalEqVector>;
     using Simulator = GetPropType<TypeTag, Properties::Simulator>;
     using Matrix = typename SparseMatrixAdapter::IstlMatrix;
+
+    using real_type = typename Vector::field_type;
+    using XGPU = GpuVector<real_type>;
+    using GPUOperatorType = Dune::MatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>;
 
 #if HAVE_MPI
     using CommunicationType = Dune::OwnerOverlapCopyCommunication<int, int>;
@@ -76,12 +86,12 @@ public:
 
     void prepare(const SparseMatrixAdapter& M, Vector& b) override
     {
-        cpuSolver_.prepare(M, b);
+        prepare(M.istlMatrix(), b);
     }
 
     void prepare(const Matrix& M, Vector& b) override
     {
-        cpuSolver_.prepare(M, b);
+        cpuSolver_.initPrepare(M, b);
     }
 
     void setResidual(Vector& b) override
@@ -121,6 +131,8 @@ public:
 
 private:
     ISTLSolver<TypeTag> cpuSolver_;
+
+    //Dune::FlexibleSolver<GPUOperatorType> gpuSolver_;
 };
 } // namespace Opm::gpuistl
 
