@@ -106,13 +106,13 @@ public:
     void extract(const int numStaticWellEq,
                  WellContributions<Scalar>& wellContribs) const;
 #endif
-    //! \brief Extract well matrices for GPUIstl format.
+    //! \brief Extract well matrices data into existing GPU matrices
     //! \param numStaticWellEq Number of static well equations
-    //! \return A tuple of GpuMatrix objects (B, C, invD)
-    std::tuple<std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
-               std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
-               std::unique_ptr<gpuistl::GpuMatrix<Scalar>>>
-    extractGPUIstl(const int numStaticWellEq) const;
+    //! \param matrices A tuple of unique_ptrs to matrices (B, C, invD) to fill with data
+    void extractGPUIstl(const int numStaticWellEq,
+                       const std::tuple<std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+                                       std::unique_ptr<gpuistl::GpuMatrix<Scalar>>,
+                                       std::unique_ptr<gpuistl::GpuMatrix<Scalar>>>& matrices) const;
 
     //! \brief Add the matrices of this well to the sparse matrix adapter.
     template<class SparseMatrixAdapter>

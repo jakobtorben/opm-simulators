@@ -25,6 +25,7 @@
 #include <opm/simulators/linalg/gpuistl/GpuWellMatrices.hpp>
 #include <opm/simulators/wells/WellInterface.hpp>
 
+#include <map>
 #include <memory>
 
 namespace Opm::gpuistl {
@@ -66,54 +67,77 @@ public:
     {
         // Store the reference to the matrices storage
         wellMatrices_ = wellMatrices;
+
+        const auto wellNames = wellMatrices_->getWellNames();
+
+        for (const auto& wellName : wellNames) {
+            if (wellMatrices_->shouldSkip(wellName)) {
+                continue;
+            }
+
+            const auto& well_matrices = wellMatrices_->getWellMatrices(wellName);
+            const auto& B = std::get<0>(well_matrices);  // B matrix
+            const auto& cellIndices = wellMatrices_->getWellCellIndices(wellName);
+            const auto numPerfs = cellIndices.dim();
+            const auto numStaticWellEq = B->rows();
+
+            // Check if we need to reallocate buffers
+            bool bufferExists = x_locals_.find(wellName) != x_locals_.end();
+            bool needsReallocation = bufferExists &&
+                                    (x_locals_[wellName]->dim() != numPerfs * block_size ||
+                                     Bx_buffers_[wellName]->dim() != numStaticWellEq);
+
+            // Allocate or reallocate local buffers only if needed
+            if (!bufferExists || needsReallocation) {
+                x_locals_[wellName] = std::make_unique<XGPU>(numPerfs * block_size);
+                Ax_locals_[wellName] = std::make_unique<XGPU>(numPerfs * block_size);
+                Bx_buffers_[wellName] = std::make_unique<XGPU>(numStaticWellEq);
+                invDBx_buffers_[wellName] = std::make_unique<XGPU>(numStaticWellEq);
+            }
+        }
     }
 
     // No-op implementation of the pure virtual method from LinearOperatorExtra
-    void setWellMatrices(const std::shared_ptr<Opm::SetableWellOperatorBase>& wellOperator) const override {
+    void setWellMatrices(const std::shared_ptr<Opm::SetableWellOperatorBase>& wellOperator [[maybe_unused]]) const override {
     }
 
     void apply(const XGPU& x, XGPU& Ax) const {
         // Implementation of y -= (C^T * (D^-1 * (B*x))) on GPU
-        if (!wellMatrices_ || wellMatrices_->empty()) {
-            // No matrices available, do nothing
-            return;
-        }
 
         // For each well in the matrices:
-        const auto& matrices = wellMatrices_->getMatrices();
+        const auto wellNames = wellMatrices_->getWellNames();
 
-        for (size_t i = 0; i < matrices.size(); ++i) {
+        for (const auto& wellName : wellNames) {
 
-            if (wellMatrices_->shouldSkip(i)) {
+            if (wellMatrices_->shouldSkip(wellName)) {
                 continue;
             }
 
-            const auto& well_matrices = matrices[i];
+            const auto& well_matrices = wellMatrices_->getWellMatrices(wellName);
             // Extract matrices for this well
             const auto& B = std::get<0>(well_matrices);  // B matrix
             const auto& C = std::get<1>(well_matrices);  // C matrix
             const auto& invD = std::get<2>(well_matrices); // D^-1 matrix
             // Get the cell indices for this well
-            const auto& cellIndices = wellMatrices_->getWellCellIndices(i);
+            const auto& cellIndices = wellMatrices_->getWellCellIndices(wellName);
 
-            // Define the number of perforations and static well equations based on the matrix dimensions
-            const auto numPerfs = cellIndices.dim();
+            auto& x_local = *x_locals_[wellName].get();
+            auto& Ax_local = *Ax_locals_[wellName].get();
+            auto& Bx = *Bx_buffers_[wellName].get();
+            auto& invDBx = *invDBx_buffers_[wellName].get();
+
+            // Extract subset vectors for the perforated cells
+            x.extractSubset(cellIndices, x_local, block_size);
+            Ax.extractSubset(cellIndices, Ax_local, block_size);
+
             const auto numStaticWellEq = B->rows();
-
-            // TODO: [perf] Don't reallocate the vectors for every apply
-
-            // Create subset vectors for the perforated cells
-            XGPU x_local = x.createSubset(cellIndices, block_size);
-            XGPU Ax_local = Ax.createSubset(cellIndices, block_size);
 
             // Compute Ax -= C^T * (D^-1 * (B*x)) for this well:
             // 1. Compute B*x_local
-            XGPU Bx(numStaticWellEq);
             B->mv(x_local, Bx);
 
             // 2. Compute D^-1 * (B*x)
             // This applies the inverted well diagonal matrix
-            XGPU invDBx(numStaticWellEq);
             invD->mv(Bx, invDBx);
 
             // Ax = Ax - duneC_^T * invDBx
@@ -125,12 +149,17 @@ public:
     }
 
     void applyscaleadd(field_type alpha, const XGPU& x, XGPU& y) const override {
-        XGPU scaleAddRes_(y.dim());
-        scaleAddRes_ = 0.0;
+        // Check if scaleAddRes_ needs to be initialized or resized
+        if (!scaleAddRes_ || scaleAddRes_->dim() != y.dim()) {
+            scaleAddRes_ = std::make_unique<XGPU>(y.dim());
+        }
+
+        *scaleAddRes_ = 0.0;
         // scaleAddRes_  = - C D^-1 B x
-        apply(x, scaleAddRes_);
+        apply(x, *scaleAddRes_);
         // Ax = Ax + alpha * scaleAddRes_
-        y.axpy(alpha, scaleAddRes_);
+        y.axpy(alpha, *scaleAddRes_);
+
     }
 
     Dune::SolverCategory::Category category() const override {
@@ -169,10 +198,18 @@ public:
     }
 
 private:
-
-
     const std::shared_ptr<const WellOperatorCPU> wellOpCPU_ptr_;
     std::shared_ptr<Opm::gpuistl::GpuWellMatrices<GpuReal>> wellMatrices_;
+
+    // Local vectors for each well that are allocated once in setWellMatrices
+    // and reused in apply to avoid reallocations
+    mutable std::map<std::string, std::unique_ptr<XGPU>> x_locals_;
+    mutable std::map<std::string, std::unique_ptr<XGPU>> Ax_locals_;
+    mutable std::map<std::string, std::unique_ptr<XGPU>> Bx_buffers_;
+    mutable std::map<std::string, std::unique_ptr<XGPU>> invDBx_buffers_;
+
+    // Temporary global vector for applyscaleadd to avoid reallocations
+    mutable std::unique_ptr<XGPU> scaleAddRes_;
 };
 
 } // namespace Opm::gpuistl
