@@ -186,6 +186,17 @@ public:
             domainPreviousMobilities_[domIdx].resize(domain.cells.size() * numPhases, 0.0);
         }
 
+        // If we start with an NLDD iteration, we set the mobilities to the
+        // initial values before the first local solve. This is to avoid comparing
+        // uninitialized mobilities for the first iteration in the simulation.
+        // In practice this means that all domains will be solved in the first
+        // iteration, as there are no changes in the mobilities.
+        if (model_.param().nldd_num_initial_newton_iter_ == 0) {
+            for (const auto& domain : domains_) {
+                updateMobilities(domain);
+            }
+        }
+
         // Set up container for the local system matrices.
         domain_matrices_.resize(num_domains);
 
@@ -231,21 +242,26 @@ public:
 
     //! \brief Do one non-linear NLDD iteration.
     template <class NonlinearSolverType>
-    SimulatorReportSingle nonlinearIterationNldd(const int iteration,
+    SimulatorReportSingle nonlinearIterationNldd(const int global_iteration,
                                                  const SimulatorTimerInterface& timer,
                                                  NonlinearSolverType& nonlinear_solver)
     {
         // -----------   Set up reports and timer   -----------
         SimulatorReportSingle report;
 
-        if (iteration < model_.param().nldd_num_initial_newton_iter_) {
-            report = model_.nonlinearIterationNewton(iteration,
+        if (global_iteration < model_.param().nldd_num_initial_newton_iter_) {
+            // If we start with a global Newton iteration, we use this change in
+            // mobilities to decide if we need to solve the domains in the next NLDD iteration.
+            for (const auto& domain : domains_) {
+                updateMobilities(domain);
+            }
+            report = model_.nonlinearIterationNewton(global_iteration,
                                                      timer,
                                                      nonlinear_solver);
             return report;
         }
 
-        model_.initialLinearization(report, iteration, nonlinear_solver.minIter(), nonlinear_solver.maxIter(), timer);
+        model_.initialLinearization(report, global_iteration, nonlinear_solver.minIter(), nonlinear_solver.maxIter(), timer);
 
         if (report.converged) {
             return report;
@@ -254,97 +270,114 @@ public:
         // -----------   If not converged, do an NLDD iteration   -----------
         Dune::Timer localSolveTimer;
         Dune::Timer detailTimer;
+        DeferredLogger logger;
         localSolveTimer.start();
-        detailTimer.start();
         auto& solution = model_.simulator().model().solution(0);
         auto initial_solution = solution;
         auto locally_solved = initial_solution;
 
-        // -----------   Decide on an ordering for the domains   -----------
-        const auto domain_order = this->getSubdomainOrder();
-        local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
+        // Solve the local NLDD problem for 5 iterations
+        const int nldd_num_outer_iter_ = 5;
+        int outer_iter = 0;
 
-        // -----------   Solve each domain separately   -----------
-        DeferredLogger logger;
-        std::vector<SimulatorReportSingle> domain_reports(domains_.size());
-        for (const int domain_index : domain_order) {
-            const auto& domain = domains_[domain_index];
-            SimulatorReportSingle local_report;
-            detailTimer.reset();
-            detailTimer.start();
-
-            bool needsSolving = checkIfSubdomainNeedsSolving(domain, iteration);
-
-            if (domain.skip || !needsSolving) {
-                local_report.skipped_domains = true;
-                local_report.converged = true;
-                domain_reports[domain.index] = local_report;
-                continue;
-            }
-            try {
-                switch (model_.param().local_solve_approach_) {
-                case DomainSolveApproach::Jacobi:
-                    solveDomainJacobi(solution, locally_solved, local_report, logger,
-                                      iteration, timer, domain);
-                    break;
-                default:
-                case DomainSolveApproach::GaussSeidel:
-                    solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
-                                           iteration, timer, domain);
-                    break;
-                }
-            }
-            catch (...) {
-                // Something went wrong during local solves.
-                local_report.converged = false;
-            }
-            // This should have updated the global matrix to be
-            // dR_i/du_j evaluated at new local solutions for
-            // i == j, at old solution for i != j.
-            if (!local_report.converged) {
-                // TODO: more proper treatment, including in parallel.
-                logger.debug(fmt::format("Convergence failure in domain {} on rank {}." , domain.index, rank_));
-            }
-            local_report.solver_time += detailTimer.stop();
-            domain_reports[domain.index] = local_report;
+        // We have one report for each domain for each outer iteration
+        std::vector<std::vector<SimulatorReportSingle>> domain_reports(nldd_num_outer_iter_);
+        for (auto& reports : domain_reports) {
+            reports.resize(domains_.size());
         }
-        detailTimer.reset();
-        detailTimer.start();
+
+        // Counts for the entire NLDD process
+        int total_converged = 0;
+        int total_converged_already = 0;
+        int total_local_newtons = 0;
+        int total_skipped = 0;
+
+        do {
+            detailTimer.start();
+            // -----------   Decide on an ordering for the domains   -----------
+            const auto domain_order = this->getSubdomainOrder();
+            local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
+
+            // -----------   Solve each domain separately   -----------
+            for (const int domain_index : domain_order) {
+                const auto& domain = domains_[domain_index];
+                SimulatorReportSingle local_report;
+                detailTimer.reset();
+                detailTimer.start();
+
+                bool needsSolving = checkIfSubdomainNeedsSolving(domain, outer_iter);
+                // Set previous mobilities to current mobilities before solving
+                updateMobilities(domain);
+
+                if (domain.skip || !needsSolving) {
+                    local_report.skipped_domains = true;
+                    local_report.converged = true;
+                    domain_reports[outer_iter][domain.index] = local_report;
+                    continue;
+                }
+                try {
+                    switch (model_.param().local_solve_approach_) {
+                    case DomainSolveApproach::Jacobi:
+                        solveDomainJacobi(solution, locally_solved, local_report, logger,
+                                        timer, domain);
+                        break;
+                    default:
+                    case DomainSolveApproach::GaussSeidel:
+                        solveDomainGaussSeidel(solution, locally_solved, local_report, logger, timer, domain);
+                        break;
+                    }
+                }
+                catch (...) {
+                    // Something went wrong during local solves.
+                    local_report.converged = false;
+                }
+                // This should have updated the global matrix to be
+                // dR_i/du_j evaluated at new local solutions for
+                // i == j, at old solution for i != j.
+                if (!local_report.converged) {
+                    // TODO: more proper treatment, including in parallel.
+                    logger.debug(fmt::format("Convergence failure in domain {} on rank {}." , domain.index, rank_));
+                }
+                local_report.solver_time += detailTimer.stop();
+                // accumulate the local report for each domain
+                domain_reports[outer_iter][domain.index] = local_report;
+            }
+
+            // Process and log stats for this outer sweep
+            auto sweep_stats = processOuterSweepResults(outer_iter, domain_reports[outer_iter], logger);
+
+            // Add this iteration's stats to the running totals
+            total_converged += sweep_stats.converged;
+            total_converged_already += sweep_stats.converged_already;
+            total_local_newtons += sweep_stats.newton_iterations;
+            total_skipped += sweep_stats.skipped;
+
+            ++outer_iter;
+
+        } while (outer_iter < nldd_num_outer_iter_);
+
         // Communicate and log all messages.
         auto global_logger = gatherDeferredLogger(logger, model_.simulator().vanguard().grid().comm());
         global_logger.logMessages();
 
+        detailTimer.reset();
+        detailTimer.start();
+
         // Accumulate local solve data.
         // Putting the counts in a single array to avoid multiple
         // comm.sum() calls. Keeping the named vars for readability.
-        std::array<int, 5> counts{ 0, 0, 0, static_cast<int>(domain_reports.size()), 0 };
+        std::array<int, 5> counts{
+            total_converged,
+            total_converged_already,
+            total_local_newtons,
+            static_cast<int>(domains_.size()),
+            total_skipped
+        };
         int& num_converged = counts[0];
         int& num_converged_already = counts[1];
         int& num_local_newtons = counts[2];
         int& num_domains = counts[3];
         int& num_skipped = counts[4];
-        {
-            auto step_newtons = 0;
-            const auto dr_size = domain_reports.size();
-            for (auto i = 0*dr_size; i < dr_size; ++i) {
-                const auto& dr = domain_reports[i];
-                if (dr.converged) {
-                    ++num_converged;
-                    if (dr.total_newton_iterations == 0) {
-                        ++num_converged_already;
-                    }
-                }
-                if (dr.skipped_domains) {
-                    ++num_skipped;
-                }
-                step_newtons += dr.total_newton_iterations;
-                // Accumulate local reports per domain
-                domain_reports_accumulated_[i] += dr;
-                // Accumulate local reports per rank
-                local_reports_accumulated_ += dr;
-            }
-            num_local_newtons = step_newtons;
-        }
 
         if (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
             solution = locally_solved;
@@ -385,12 +418,10 @@ public:
         }
 #endif // HAVE_MPI
 
-        // update the mobilities after the local solves
-        updateMobilities();
         const bool is_iorank = this->rank_ == 0;
         if (is_iorank) {
-            OpmLog::debug(fmt::format("Local solves finished. Converged for {}/{} domains. {} domains were skipped. {} domains did no work. {} total local Newton iterations.\n",
-                                      num_converged, num_domains, num_skipped, num_converged_already, num_local_newtons));
+            OpmLog::debug(fmt::format("Local solves finished. Converged for {}/{} domain solves. {} domain solves were skipped. {} domain solves did no work. {} total local Newton iterations.\n",
+                                      num_converged, num_domains*nldd_num_outer_iter_, num_skipped, num_converged_already, num_local_newtons));
         }
         auto total_local_solve_time = localSolveTimer.stop();
         report.local_solve_time += total_local_solve_time;
@@ -402,7 +433,7 @@ public:
         // "if (iteration == 0)" and similar blocks, and also makes it a little
         // easier to spot the iteration residuals in the DBG file. A more sophisticated
         // approach can be done later.
-        auto rep = model_.nonlinearIterationNewton(iteration + 100, timer, nonlinear_solver);
+        auto rep = model_.nonlinearIterationNewton(global_iteration + 100, timer, nonlinear_solver);
         report += rep;
         if (rep.converged) {
             report.converged = true;
@@ -472,7 +503,6 @@ private:
                 const SimulatorTimerInterface& timer,
                 SimulatorReportSingle& local_report,
                 DeferredLogger& logger,
-                [[maybe_unused]] const int global_iteration,
                 const bool initial_assembly_required)
     {
         auto& modelSimulator = model_.simulator();
@@ -484,10 +514,10 @@ private:
         // with the initial values, we only need to check
         // for local convergence. Otherwise, we must do a local
         // assembly.
-        int iter = 0;
+        int inner_iter = 0;
         if (initial_assembly_required) {
             detailTimer.start();
-            modelSimulator.model().newtonMethod().setIterationIndex(iter);
+            modelSimulator.model().newtonMethod().setIterationIndex(inner_iter);
             // TODO: we should have a beginIterationLocal function()
             // only handling the well model for now
             wellModel_.assemble(modelSimulator.model().newtonMethod().numIterations(),
@@ -557,8 +587,8 @@ private:
             // Assemble well and reservoir.
             detailTimer.reset();
             detailTimer.start();
-            ++iter;
-            modelSimulator.model().newtonMethod().setIterationIndex(iter);
+            ++inner_iter;
+            modelSimulator.model().newtonMethod().setIterationIndex(inner_iter);
             // TODO: we should have a beginIterationLocal function()
             // only handling the well model for now
             // Assemble reservoir locally.
@@ -577,7 +607,7 @@ private:
             detailTimer.reset();
             detailTimer.start();
             resnorms.clear();
-            convreport = this->getDomainConvergence(domain, timer, iter, logger, resnorms);
+            convreport = this->getDomainConvergence(domain, timer, inner_iter, logger, resnorms);
             convergence_history.push_back(resnorms);
             local_report.update_time += detailTimer.stop();
 
@@ -596,20 +626,20 @@ private:
             if (!convreport.converged() && !convreport.wellFailed()) {
                 bool oscillate = false;
                 bool stagnate = false;
-                detail::detectOscillations(convergence_history, iter, numPhases,
+                detail::detectOscillations(convergence_history, inner_iter, numPhases,
                                            Scalar{0.2}, 1, oscillate, stagnate);
                 if (oscillate) {
                     damping_factor *= 0.85;
                     logger.debug(fmt::format("| Damping factor is now {}", damping_factor));
                 }
             }
-        } while (!convreport.converged() && iter <= max_iter);
+        } while (!convreport.converged() && inner_iter <= max_iter);
 
         modelSimulator.problem().endIteration();
 
         local_report.converged = convreport.converged();
-        local_report.total_newton_iterations = iter;
-        local_report.total_linearizations += iter;
+        local_report.total_newton_iterations = inner_iter;
+        local_report.total_linearizations += inner_iter;
         // TODO: set more info, timing etc.
         return convreport;
     }
@@ -933,13 +963,12 @@ private:
                            GlobalEqVector& locally_solved,
                            SimulatorReportSingle& local_report,
                            DeferredLogger& logger,
-                           const int iteration,
                            const SimulatorTimerInterface& timer,
                            const Domain& domain)
     {
         auto initial_local_well_primary_vars = wellModel_.getPrimaryVarsDomain(domain.index);
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
-        auto convrep = solveDomain(domain, timer, local_report, logger, iteration, false);
+        auto convrep = solveDomain(domain, timer, local_report, logger, false);
         if (local_report.converged) {
             auto local_solution = Details::extractVector(solution, domain.cells);
             Details::setGlobal(local_solution, domain.cells, locally_solved);
@@ -957,13 +986,12 @@ private:
                                 GlobalEqVector& locally_solved,
                                 SimulatorReportSingle& local_report,
                                 DeferredLogger& logger,
-                                const int iteration,
                                 const SimulatorTimerInterface& timer,
                                 const Domain& domain)
     {
         auto initial_local_well_primary_vars = wellModel_.getPrimaryVarsDomain(domain.index);
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
-        auto convrep = solveDomain(domain, timer, local_report, logger, iteration, true);
+        auto convrep = solveDomain(domain, timer, local_report, logger, true);
         if (!local_report.converged) {
             // We look at the detailed convergence report to evaluate
             // if we should accept the unconverged solution.
@@ -1089,12 +1117,10 @@ private:
                                      param.local_domains_partition_well_neighbor_levels_);
     }
 
-    void updateMobilities()
+    void updateMobilities(const Domain& domain)
     {
-    // Store mobility values for all domains
-    for (const auto& domain : domains_) {
         if (domain.skip) {
-            continue;
+            return;
         }
 
         for (int cellIdx = 0; cellIdx < domain.cells.size(); ++cellIdx) {
@@ -1109,9 +1135,7 @@ private:
                 domainPreviousMobilities_[domain.index][mobIdx] = getValue(intQuants.mobility(phaseIdx));
             }
         }
-
     }
-}
 
     bool checkIfSubdomainNeedsSolving(const Domain& domain, const int iteration)
     {
@@ -1119,9 +1143,8 @@ private:
             return false;
         }
 
-        // Skip mobility check on first NLDD iteration
-        bool firstNlddIteration = (iteration <= model_.param().nldd_num_initial_newton_iter_);
-        if (firstNlddIteration) {
+        // Always solve on first NLDD iteration
+        if (iteration == 0) {
             return true;
         }
 
@@ -1132,7 +1155,6 @@ private:
     {
         int numCells = domain.cells.size();
         auto& prevMobilities = domainPreviousMobilities_[domain.index];
-        bool needsSolving = false;
 
         // Check mobility changes for all cells in the domain
         for (int cellIdx = 0; cellIdx < numCells; ++cellIdx) {
@@ -1157,11 +1179,53 @@ private:
                 const auto mobility = getValue(intQuants.mobility(phaseIdx));
                 const auto relDiff = std::abs(mobility - prevMobilities[mobIdx]) / cellMob;
                 if (relDiff > model_.param().nldd_relative_mobility_change_tol_) {
-                    needsSolving = true;
+                    return true;
                 }
             }
         }
-        return needsSolving;
+        return false;
+    }
+
+    //! \brief Process and report the results of a single NLDD outer sweep
+    struct OuterSweepStats {
+        int converged;
+        int converged_already;
+        int newton_iterations;
+        int skipped;
+    };
+
+    OuterSweepStats processOuterSweepResults(const int outer_iter,
+                                            const std::vector<SimulatorReportSingle>& iter_reports,
+                                            DeferredLogger& logger)
+    {
+        OuterSweepStats stats{0, 0, 0, 0};
+
+        // Calculate statistics for this outer sweep
+        for (size_t domain_idx = 0; domain_idx < iter_reports.size(); ++domain_idx) {
+            const auto& dr = iter_reports[domain_idx];
+            if (dr.converged) {
+                ++stats.converged;
+                if (dr.total_newton_iterations == 0) {
+                    ++stats.converged_already;
+                }
+            }
+            if (dr.skipped_domains) {
+                ++stats.skipped;
+            }
+            stats.newton_iterations += dr.total_newton_iterations;
+
+            // Accumulate local reports per domain
+            domain_reports_accumulated_[domain_idx] += dr;
+            // Accumulate local reports per rank
+            local_reports_accumulated_ += dr;
+        }
+
+        // Log the statistics for this outer sweep
+        logger.debug(fmt::format("Rank {} NLDD Outer sweep {} - Local solves: Converged for {}/{} domains. {} domains were skipped. {} domains did no work. {} local Newton iterations.",
+                              rank_, outer_iter, stats.converged, domains_.size(), stats.skipped,
+                              stats.converged_already, stats.newton_iterations));
+
+        return stats;
     }
 
     BlackoilModel<TypeTag>& model_; //!< Reference to model
