@@ -17,8 +17,7 @@
 #ifndef OPM_ISTLSOLVERGPUISTL_HEADER_INCLUDED
 #define OPM_ISTLSOLVERGPUISTL_HEADER_INCLUDED
 
-#include "dune/istl/operators.hh"
-#include "opm/simulators/linalg/gpuistl/GpuVector.hpp"
+#include <dune/istl/operators.hh>
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
 
@@ -28,8 +27,15 @@
 #include <opm/simulators/linalg/PreconditionerFactory_impl.hpp>
 #include <opm/simulators/linalg/FlexibleSolver_impl.hpp>
 
+#if HAVE_CUDA
+#if USE_HIP
+#include <opm/simulators/linalg/gpuistl_hip/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl_hip/GpuVector.hpp>
+#else
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
-
+#include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
+#endif
+#endif
 
 namespace Opm::gpuistl
 {
@@ -67,14 +73,14 @@ public:
     ISTLSolverGPUISTL(const Simulator& simulator,
                       [[maybe_unused]] const FlowLinearSolverParameters& parameters,
                       [[maybe_unused]] bool forceSerial = false)
-        : m_parameters(parameters)
+                      : m_parameters(parameters)
     {
         // TODO: Is there a nicer way of reading the parameters?
         // TODO: We already read them in the runtime option proxy, so we could just
         //       pass them to the constructor here. Though, then we would lose the
         //       common constructor signature.
         m_parameters.init(simulator.vanguard().eclState().getSimulationConfig().useCPR());
-        m_propertyTree = setupPropertyTree(parameters,
+        m_propertyTree = setupPropertyTree(m_parameters,
                                            Parameters::IsSet<Parameters::LinearSolverMaxIter>(),
                                            Parameters::IsSet<Parameters::LinearSolverReduction>());
     }
@@ -153,7 +159,7 @@ public:
 
         ++m_solveCount;
 
-        if (m_x) {
+        if (!m_x) {
             m_x = std::make_unique<GpuVector<real_type>>(x);
         } else {
             m_x->copyFromHost(x);

@@ -168,7 +168,14 @@ namespace Dune
         const std::string solver_type = prm.get<std::string>("solver", "bicgstab");
 
         if constexpr (Opm::is_gpu_operator_v<Operator>) {
-
+            if (solver_type == "bicgstab") {
+                linsolver_ = std::make_shared<Dune::BiCGSTABSolver<VectorType>>(*linearoperator_for_solver_,
+                                                                                *scalarproduct_,
+                                                                                *preconditioner_,
+                                                                                tol, // desired residual reduction factor
+                                                                                maxiter, // maximum number of iterations
+                                                                                verbosity);
+                }
         } else {
             if (solver_type == "bicgstab") {
                 linsolver_ = std::make_shared<Dune::BiCGSTABSolver<VectorType>>(*linearoperator_for_solver_,
