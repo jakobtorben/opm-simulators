@@ -14,18 +14,16 @@
   along with OPM.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <config.h>
+#include "config.h"
 
 #include <functional>
 #include <opm/simulators/linalg/gpuistl/FlexibleSolverWrapper.hpp>
 
-#include <dune/istl/owneroverlapcopy.hh>
 #include <dune/common/parallel/communication.hh>
+#include <dune/istl/owneroverlapcopy.hh>
 
-#include <opm/simulators/linalg/PreconditionerFactory.hpp>
-#include <opm/simulators/linalg/PreconditionerFactory_impl.hpp>
 #include <opm/simulators/linalg/FlexibleSolver.hpp>
-#include <opm/simulators/linalg/FlexibleSolver_impl.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
 
 namespace Opm::gpuistl
 {
@@ -37,12 +35,12 @@ namespace
                typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractSolverPtrType,
                std::reference_wrapper<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractPreconditionerType>>
     createOperatorAndSolver(const Matrix& matrix,
-                   [[maybe_unused]] bool parallel,
-                   const PropertyTree& prm,
-                   std::size_t pressureIndex,
-                   std::function<Vector()> weightCalculator,
-                   [[maybe_unused]] const bool forceSerial,
-                   [[maybe_unused]] Comm* comm)
+                            [[maybe_unused]] bool parallel,
+                            const PropertyTree& prm,
+                            std::size_t pressureIndex,
+                            std::function<Vector()> weightCalculator,
+                            [[maybe_unused]] const bool forceSerial,
+                            [[maybe_unused]] Comm* comm)
     {
         // For now only matrix adapter is supported
         using OperatorType = Dune::MatrixAdapter<Matrix, Vector, Vector>;
@@ -81,7 +79,7 @@ FlexibleSolverWrapper<Matrix, Vector, Comm>::FlexibleSolverWrapper(
 {
 }
 
-template<class Matrix, class Vector, class Comm>
+template <class Matrix, class Vector, class Comm>
 void
 FlexibleSolverWrapper<Matrix, Vector, Comm>::apply(Vector& x, Vector& y, Dune::InverseOperatorResult& result)
 {
@@ -99,14 +97,17 @@ FlexibleSolverWrapper<Matrix, Vector, Comm>::update()
 } // namespace Opm::gpuistl
 
 #if HAVE_MPI
-using CommunicationType = Dune::OwnerOverlapCopyCommunication<int,int>;
+using CommunicationType = Dune::OwnerOverlapCopyCommunication<int, int>;
 #else
 using CommunicationType = Dune::Communication<int>;
 #endif
 
-#define INSTANTIATE_FLEXIBLE_SOLVER_WRAPPER(real_type) \
-    template class ::Opm::gpuistl::FlexibleSolverWrapper<::Opm::gpuistl::GpuSparseMatrix<real_type>, ::Opm::gpuistl::GpuVector<real_type>, CommunicationType>
+#define INSTANTIATE_FLEXIBLE_SOLVER_WRAPPER(real_type)                                                                 \
+    template class ::Opm::gpuistl::FlexibleSolverWrapper<::Opm::gpuistl::GpuSparseMatrix<real_type>,                   \
+                                                         ::Opm::gpuistl::GpuVector<real_type>,                         \
+                                                         CommunicationType>
 
+#if FLOW_INSTANTIATE_FLOAT
 INSTANTIATE_FLEXIBLE_SOLVER_WRAPPER(float);
+#endif
 INSTANTIATE_FLEXIBLE_SOLVER_WRAPPER(double);
-

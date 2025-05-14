@@ -17,10 +17,16 @@
 #ifndef OPM_ISTLSOLVERRUNTIMEOPTIONPROXY_HEADER_INCLUDED
 #define OPM_ISTLSOLVERRUNTIMEOPTIONPROXY_HEADER_INCLUDED
 
-#include "opm/simulators/linalg/setupPropertyTree.hpp"
+#include <opm/simulators/linalg/setupPropertyTree.hpp>
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
+#if COMPILE_GPU_BRIDGE
+#include <opm/simulators/linalg/ISTLSolverGpuBridge.hpp>
+#endif
+
+#if HAVE_CUDA
 #include <opm/simulators/linalg/gpuistl/ISTLSolverGPUISTL.hpp>
+#endif 
 
 namespace Opm
 {
@@ -156,12 +162,19 @@ private:
     void createSolver(const Simulator& simulator, Args&&... args)
     {
         const auto backend = getBackend(simulator, std::forward<Args>(args)...);
-
-        if (backend == "gpu") {
-            istlSolver_ = std::make_unique<gpuistl::ISTLSolverGPUISTL<TypeTag>>(simulator, std::forward<Args>(args)...);
-        } else if (backend == "cpu") {
+        if (backend == "cpu") {
+#if COMPILE_GPU_BRIDGE
+            istlSolver_ = std::make_unique<ISTLSolverGpuBridge<TypeTag>>(simulator, std::forward<Args>(args)...);
+#else
             istlSolver_ = std::make_unique<ISTLSolver<TypeTag>>(simulator, std::forward<Args>(args)...);
-        } else {
+#endif
+        } 
+#if HAVE_CUDA
+        else if (backend == "gpu") {
+            istlSolver_ = std::make_unique<gpuistl::ISTLSolverGPUISTL<TypeTag>>(simulator, std::forward<Args>(args)...);
+        } 
+#endif
+        else {
             OPM_THROW(std::invalid_argument, "Unknown backend: " + backend);
         }
     }

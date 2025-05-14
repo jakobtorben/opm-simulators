@@ -125,7 +125,7 @@ public:
                                                 "Check for errors related to missing nodes.");
     }
 
-    void setResidual(Vector& b) override
+    void setResidual(Vector&) override
     {
         // Should be handled in prepare() instead.
     }
@@ -138,7 +138,7 @@ public:
         m_rhs->copyToHost(b);
     }
 
-    void setMatrix(const SparseMatrixAdapter& M) override
+    void setMatrix(const SparseMatrixAdapter&) override
     {
         // Should be handled in prepare() instead.
     }
