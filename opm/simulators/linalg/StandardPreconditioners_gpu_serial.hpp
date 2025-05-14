@@ -125,7 +125,7 @@ struct StandardPreconditioners<Operator,
             }
             using Scalar = typename V::field_type;
             using GpuVector = gpuistl::GpuVector<Scalar>;
-            using LevelTransferPolicy = PressureTransferPolicy<O, Dune::Amg::SequentialInformation, Scalar, false>;
+            using LevelTransferPolicy = Opm::gpuistl::GpuPressureTransferPolicy<O, Dune::Amg::SequentialInformation, Scalar, false>;
             using GpuOwningTwoLevelPreconditioner = typename gpuistl::GpuOwningTwoLevelPreconditioner<O, GpuVector, LevelTransferPolicy>;
             return std::make_shared<GpuOwningTwoLevelPreconditioner>(op, prm, weightsCalculator, pressureIndex);
         });
@@ -136,7 +136,7 @@ struct StandardPreconditioners<Operator,
             }
             using Scalar = typename V::field_type;
             using GpuVector = gpuistl::GpuVector<Scalar>;
-            using LevelTransferPolicy = PressureTransferPolicy<O, Dune::Amg::SequentialInformation, Scalar, true>;
+            using LevelTransferPolicy = Opm::gpuistl::GpuPressureTransferPolicy<O, Dune::Amg::SequentialInformation, Scalar, true>;
             using GpuOwningTwoLevelPreconditioner = typename gpuistl::GpuOwningTwoLevelPreconditioner<O, GpuVector, LevelTransferPolicy>;
             return std::make_shared<GpuOwningTwoLevelPreconditioner>(op, prm, weightsCalculator, pressureIndex);
         });
