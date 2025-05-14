@@ -25,7 +25,7 @@
 #include <opm/simulators/linalg/PreconditionerWithUpdate.hpp>
 #include <opm/simulators/linalg/PropertyTree.hpp>
 
-namespace Opm::gpuistl
+namespace Opm::gpuistl::detail
 {
 template <class Matrix, class Vector, class Comm>
 class FlexibleSolverWrapper
@@ -60,6 +60,6 @@ private:
         std::tuple<AbstractOperatorPtrType, AbstractSolverPtrType, std::reference_wrapper<AbstractPreconditionerType>>&&
             solverTuple);
 };
-} // namespace Opm::gpuistl
+} // namespace Opm::gpuistl::detail
 
 #endif // OPM_FLEXIBLESOLVERWRAPPER_HEADER_INCLUDED

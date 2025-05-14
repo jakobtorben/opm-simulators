@@ -17,7 +17,7 @@
 #include "config.h"
 
 #include <functional>
-#include <opm/simulators/linalg/gpuistl/FlexibleSolverWrapper.hpp>
+#include <opm/simulators/linalg/gpuistl/detail/FlexibleSolverWrapper.hpp>
 
 #include <dune/common/parallel/communication.hh>
 #include <dune/istl/owneroverlapcopy.hh>
@@ -25,7 +25,7 @@
 #include <opm/simulators/linalg/FlexibleSolver.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
 
-namespace Opm::gpuistl
+namespace Opm::gpuistl::detail
 {
 
 namespace
@@ -103,7 +103,7 @@ using CommunicationType = Dune::Communication<int>;
 #endif
 
 #define INSTANTIATE_FLEXIBLE_SOLVER_WRAPPER(real_type)                                                                 \
-    template class ::Opm::gpuistl::FlexibleSolverWrapper<::Opm::gpuistl::GpuSparseMatrix<real_type>,                   \
+    template class ::Opm::gpuistl::detail::FlexibleSolverWrapper<::Opm::gpuistl::GpuSparseMatrix<real_type>,                   \
                                                          ::Opm::gpuistl::GpuVector<real_type>,                         \
                                                          CommunicationType>
 

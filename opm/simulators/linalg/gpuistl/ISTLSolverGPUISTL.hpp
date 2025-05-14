@@ -21,7 +21,7 @@
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
 
-#include <opm/simulators/linalg/gpuistl/FlexibleSolverWrapper.hpp>
+#include <opm/simulators/linalg/gpuistl/detail/FlexibleSolverWrapper.hpp>
 
 #if HAVE_CUDA
 #if USE_HIP
@@ -57,7 +57,7 @@ public:
     using CommunicationType = Dune::Communication<int>;
 #endif
 
-    using SolverType = Opm::gpuistl::FlexibleSolverWrapper<GpuMatrixType, XGPU, CommunicationType>;
+    using SolverType = Opm::gpuistl::detail::FlexibleSolverWrapper<GpuMatrixType, XGPU, CommunicationType>;
 
 
 
