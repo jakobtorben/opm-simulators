@@ -301,6 +301,7 @@ if (HAVE_CUDA)
   ADD_CUDA_OR_HIP_FILE(MAIN_SOURCE_FILES opm/simulators/linalg GpuJac.cpp)
   ADD_CUDA_OR_HIP_FILE(MAIN_SOURCE_FILES opm/simulators/linalg GpuSeqILU0.cpp)
   ADD_CUDA_OR_HIP_FILE(MAIN_SOURCE_FILES opm/simulators/linalg set_device.cpp)
+  ADD_CUDA_OR_HIP_FILE(MAIN_SOURCE_FILES opm/simulators/linalg FlexibleSolverWrapper.cpp)
 
   # HEADERS
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg detail/autotuner.hpp)
@@ -346,6 +347,8 @@ if (HAVE_CUDA)
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg gpu_resources.hpp)
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg detail/is_gpu_pointer.hpp)
   ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg PreconditionerCPUMatrixToGPUMatrix.hpp)
+  ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg ISTLSolverGPUISTL.hpp)
+  ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg FlexibleSolverWrapper.hpp)
   
   if(MPI_FOUND)
     ADD_CUDA_OR_HIP_FILE(PUBLIC_HEADER_FILES opm/simulators/linalg GpuOwnerOverlapCopy.hpp)

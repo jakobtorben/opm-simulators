@@ -21,11 +21,7 @@
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
 
-#include <opm/simulators/linalg/FlexibleSolver.hpp>
-// TODO: These should be removed so that we avoid the compilation burden.
-//       That is, we should instantiate them in the cpp file instead.
-#include <opm/simulators/linalg/FlexibleSolver_impl.hpp>
-#include <opm/simulators/linalg/PreconditionerFactory_impl.hpp>
+#include <opm/simulators/linalg/gpuistl/FlexibleSolverWrapper.hpp>
 
 #if HAVE_CUDA
 #if USE_HIP
@@ -53,15 +49,17 @@ public:
 
     using real_type = typename Vector::field_type;
     using XGPU = GpuVector<real_type>;
-    using GPUOperatorType = Dune::MatrixAdapter<GpuSparseMatrix<real_type>, XGPU, XGPU>;
-    using AbstractGPUOperator = Dune::LinearOperator<XGPU, XGPU>;
-    using SolverType = Dune::FlexibleSolver<GPUOperatorType>;
+    using GpuMatrixType = GpuSparseMatrix<real_type>;
 
 #if HAVE_MPI
     using CommunicationType = Dune::OwnerOverlapCopyCommunication<int, int>;
 #else
     using CommunicationType = Dune::Communication<int>;
 #endif
+
+    using SolverType = Opm::gpuistl::FlexibleSolverWrapper<GpuMatrixType, XGPU, CommunicationType>;
+
+
 
     /// Construct a system solver.
     /// \param[in] simulator   The opm-models simulator object
@@ -71,9 +69,10 @@ public:
     ///                        local to the current rank, instead of creating a
     ///                        parallel (MPI distributed) linear solver.
     ISTLSolverGPUISTL(const Simulator& simulator,
-                      [[maybe_unused]] const FlowLinearSolverParameters& parameters,
-                      [[maybe_unused]] bool forceSerial = false)
+                      const FlowLinearSolverParameters& parameters,
+                      bool forceSerial = false)
         : m_parameters(parameters)
+        , m_forceSerial(forceSerial)
     {
         // TODO: Is there a nicer way of reading the parameters?
         // TODO: We already read them in the runtime option proxy, so we could just
@@ -152,7 +151,7 @@ public:
         if (!m_rhs) {
             OPM_THROW(std::runtime_error, "m_rhs not initialized, prepare(matrix, rhs); needs to be called");
         }
-        if (!m_gpuFlexibleSolver) {
+        if (!m_gpuSolver) {
             OPM_THROW(std::runtime_error,
                       "m_gpuFlexibleSolver not initialized, prepare(matrix, rhs); needs to be called");
         }
@@ -168,7 +167,7 @@ public:
         // TODO: Write matrix to disk if needed
         Dune::InverseOperatorResult result;
 
-        m_gpuFlexibleSolver->apply(*m_x, *m_rhs, result);
+        m_gpuSolver->apply(*m_x, *m_rhs, result);
         m_lastSeenIterations = result.iterations;
         m_x->copyToHost(x);
         if (!result.converged) {
@@ -211,16 +210,15 @@ private:
     {
         if (!m_matrix) {
             m_matrix.reset(new auto(GpuSparseMatrix<real_type>::fromMatrix(M)));
-            m_gpuOperator = std::make_unique<GPUOperatorType>(*m_matrix);
             std::function<XGPU()> weightsCalculator = {};
-            m_gpuFlexibleSolver
-                = std::make_unique<SolverType>(*m_gpuOperator, m_propertyTree, weightsCalculator, pressureIndex);
-
+            const bool parallel = false;
+            m_gpuSolver = std::make_unique<SolverType>(
+                *m_matrix, parallel, m_propertyTree, pressureIndex, weightsCalculator, m_forceSerial, nullptr);
         } else {
             m_matrix->updateNonzeroValues(M);
         }
 
-        m_gpuFlexibleSolver->preconditioner().update();
+        m_gpuSolver->update();
     }
 
     void updateRhs(const Vector& b)
@@ -234,15 +232,14 @@ private:
 
     std::unique_ptr<GpuSparseMatrix<real_type>> m_matrix;
 
-    std::unique_ptr<GPUOperatorType> m_gpuOperator;
-
-    std::unique_ptr<SolverType> m_gpuFlexibleSolver;
+    std::unique_ptr<SolverType> m_gpuSolver;
 
     std::unique_ptr<GpuVector<real_type>> m_rhs;
     std::unique_ptr<GpuVector<real_type>> m_x;
 
     FlowLinearSolverParameters m_parameters;
     PropertyTree m_propertyTree;
+    const bool m_forceSerial;
 
     int m_lastSeenIterations = 0;
     int m_solveCount = 0;
