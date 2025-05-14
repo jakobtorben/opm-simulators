@@ -24,8 +24,8 @@
 #include <opm/simulators/linalg/FlexibleSolver.hpp>
 // TODO: These should be removed so that we avoid the compilation burden.
 //       That is, we should instantiate them in the cpp file instead.
-#include <opm/simulators/linalg/PreconditionerFactory_impl.hpp>
 #include <opm/simulators/linalg/FlexibleSolver_impl.hpp>
+#include <opm/simulators/linalg/PreconditionerFactory_impl.hpp>
 
 #if HAVE_CUDA
 #if USE_HIP
@@ -73,7 +73,7 @@ public:
     ISTLSolverGPUISTL(const Simulator& simulator,
                       [[maybe_unused]] const FlowLinearSolverParameters& parameters,
                       [[maybe_unused]] bool forceSerial = false)
-                      : m_parameters(parameters)
+        : m_parameters(parameters)
     {
         // TODO: Is there a nicer way of reading the parameters?
         // TODO: We already read them in the runtime option proxy, so we could just
@@ -170,6 +170,22 @@ public:
 
         m_gpuFlexibleSolver->apply(*m_x, *m_rhs, result);
         m_lastSeenIterations = result.iterations;
+        m_x->copyToHost(x);
+        if (!result.converged) {
+            if (result.reduction < m_parameters.relaxed_linear_solver_reduction_) {
+                std::stringstream ss;
+                ss << "Full linear solver tolerance not achieved. The reduction is:" << result.reduction << " after "
+                   << result.iterations << " iterations ";
+                OpmLog::warning(ss.str());
+                return true;
+            }
+        }
+        // Check for failure of linear solver.
+        if (!m_parameters.ignoreConvergenceFailure_ && !result.converged) {
+            const std::string msg("Convergence failure for linear solver.");
+            OPM_THROW_NOLOG(NumericalProblem, msg);
+        }
+
 
         return result.converged;
     }
@@ -197,9 +213,9 @@ private:
             m_matrix.reset(new auto(GpuSparseMatrix<real_type>::fromMatrix(M)));
             m_gpuOperator = std::make_unique<GPUOperatorType>(*m_matrix);
             std::function<XGPU()> weightsCalculator = {};
-            m_gpuFlexibleSolver = std::make_unique<SolverType>(
-                *m_gpuOperator, m_propertyTree, weightsCalculator, pressureIndex);
-            
+            m_gpuFlexibleSolver
+                = std::make_unique<SolverType>(*m_gpuOperator, m_propertyTree, weightsCalculator, pressureIndex);
+
         } else {
             m_matrix->updateNonzeroValues(M);
         }
