@@ -103,7 +103,7 @@ public:
 
     virtual void update() override
     {
-        //weights_ = weightsCalculator_();
+        weights_ = weightsCalculator_();
         updateImpl();
     }
 
