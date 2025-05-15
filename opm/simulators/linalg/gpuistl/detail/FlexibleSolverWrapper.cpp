@@ -94,7 +94,7 @@ FlexibleSolverWrapper<Matrix, Vector, Comm>::update()
 }
 
 
-} // namespace Opm::gpuistl
+} // namespace Opm::gpuistl::detail
 
 #if HAVE_MPI
 using CommunicationType = Dune::OwnerOverlapCopyCommunication<int, int>;
