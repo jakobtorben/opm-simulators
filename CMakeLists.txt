@@ -556,6 +556,11 @@ if(USE_TRACY_PROFILER AND Tracy_FOUND)
   target_link_libraries(MainDispatchDynamic Tracy::TracyClient)
 endif()
 
+# If we are hipifying the code, we need to make sure the hipification
+# happens before the compilation of the object files.
+if (CONVERT_CUDA_TO_HIP)
+  target_sources(MainDispatchDynamic PRIVATE ${PUBLIC_HEADER_FILES})
+endif()
 # Strictly we only depend on the update-version target,
 # but this is not exposed in a super-build.
 add_dependencies(moduleVersion opmsimulators)
@@ -572,6 +577,12 @@ set(FLOW_VARIANT_MODELS brine_energy onephase onephase_energy)
 set(FLOW_TGTS)
 foreach(OBJ ${COMMON_MODELS} ${FLOW_MODELS} ${FLOW_VARIANT_MODELS})
   add_library(flow_lib${OBJ} OBJECT flow/flow_${OBJ}.cpp)
+
+  # If we are hipifying the code, we need to make sure the hipification
+  # happens before the compilation of the object files.
+  if (CONVERT_CUDA_TO_HIP)
+    target_sources(flow_lib${OBJ} PRIVATE ${PUBLIC_HEADER_FILES})
+  endif()
   list(APPEND FLOW_TGTS $<TARGET_OBJECTS:flow_lib${OBJ}>)
   if(TARGET fmt::fmt)
     target_link_libraries(flow_lib${OBJ} fmt::fmt)
