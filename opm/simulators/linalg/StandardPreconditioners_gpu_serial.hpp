@@ -90,7 +90,7 @@ struct StandardPreconditioners<Operator,
             });
         });
 
-        F::addCreator("CPR", [](const O& op, const P& prm, const std::function<V()>& weightsCalculator, std::size_t pressureIndex) {
+        F::addCreator("cpr", [](const O& op, const P& prm, const std::function<V()>& weightsCalculator, std::size_t pressureIndex) {
             if (pressureIndex == std::numeric_limits<std::size_t>::max()) {
                 OPM_THROW(std::logic_error, "Pressure index out of bounds. It needs to specified for CPR");
             }
@@ -101,7 +101,7 @@ struct StandardPreconditioners<Operator,
             return std::make_shared<GpuOwningTwoLevelPreconditioner>(op, prm, weightsCalculator, pressureIndex);
         });
 
-        F::addCreator("CPRT", [](const O& op, const P& prm, const std::function<V()>& weightsCalculator, std::size_t pressureIndex) {
+        F::addCreator("cprt", [](const O& op, const P& prm, const std::function<V()>& weightsCalculator, std::size_t pressureIndex) {
             if (pressureIndex == std::numeric_limits<std::size_t>::max()) {
                 OPM_THROW(std::logic_error, "Pressure index out of bounds. It needs to specified for CPR");
             }
@@ -117,7 +117,7 @@ struct StandardPreconditioners<Operator,
         if constexpr (std::is_same_v<O, Dune::MatrixAdapter<M, V, V>>) {
 #if HAVE_AMGX
             // Only add AMGX for scalar matrices
-            F::addCreator("AMGX", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+            F::addCreator("amgx", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
                 // Only create AMGX preconditioner for scalar matrices
                 if (op.getmat().blockSize() == 1) {
                     auto prm_copy = prm;
