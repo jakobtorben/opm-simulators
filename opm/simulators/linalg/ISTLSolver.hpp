@@ -30,6 +30,8 @@
 #include <opm/common/Exceptions.hpp>
 #include <opm/common/TimingMacros.hpp>
 
+#include <opm/grid/utility/ElementChunks.hpp>
+
 #include <opm/models/discretization/common/fvbaseproperties.hh>
 #include <opm/models/common/multiphasebaseproperties.hh>
 #include <opm/models/utils/parametersystem.hpp>
@@ -160,6 +162,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         using AbstractPreconditionerType = Dune::PreconditionerWithUpdate<Vector, Vector>;
         using WellModelOperator = WellModelAsLinearOperator<WellModel, Vector, Vector>;
         using ElementMapper = GetPropType<TypeTag, Properties::ElementMapper>;
+        using ElementChunksType = ElementChunks<GridView, Dune::Partitions::Interior>;
+
         constexpr static std::size_t pressureIndex = GetPropType<TypeTag, Properties::Indices>::pressureSwitchIdx;
 
         enum { enablePolymerMolarWeight = getPropValue<TypeTag, Properties::EnablePolymerMW>() };
@@ -312,6 +316,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                 }
                 OpmLog::note(os.str());
             }
+
+            element_chunks_ = std::make_unique<ElementChunksType>(simulator_.vanguard().gridView(), Dune::Partitions::interior, ThreadManager::maxThreads());
         }
 
         // nothing to clean here
@@ -616,9 +622,9 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                             Vector weights(rhs_->size());
                             ElementContext elemCtx(simulator_);
                             Amg::getTrueImpesWeights(pressIndex, weights,
-                                                             simulator_.vanguard().gridView(),
-                                                             elemCtx, simulator_.model(),
-                                                             ThreadManager::threadId());
+                                                    elemCtx, simulator_.model(),
+                                                    *element_chunks_,
+                                                    ThreadManager::threadId());
                             return weights;
                         };
                 } else if  (weightsType == "trueimpesanalytic" ) {
@@ -628,9 +634,9 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                             Vector weights(rhs_->size());
                             ElementContext elemCtx(simulator_);
                             Amg::getTrueImpesWeightsAnalytic(pressIndex, weights,
-                                                             simulator_.vanguard().gridView(),
-                                                             elemCtx, simulator_.model(),
-                                                             ThreadManager::threadId());
+                                                            elemCtx, simulator_.model(),
+                                                            *element_chunks_,
+                                                            ThreadManager::threadId());
                             return weights;
                         };
                 } else {
@@ -678,6 +684,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         std::vector<PropertyTree> prm_;
 
         std::shared_ptr< CommunicationType > comm_;
+        std::unique_ptr<ElementChunksType> element_chunks_;
     }; // end ISTLSolver
 
 } // namespace Opm

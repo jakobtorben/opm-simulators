@@ -19,6 +19,7 @@
 
 #include <dune/istl/operators.hh>
 #include <memory>
+#include <opm/grid/utility/ElementChunks.hpp>
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/getQuasiImpesWeights.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
@@ -46,7 +47,9 @@ public:
     using Simulator = GetPropType<TypeTag, Properties::Simulator>;
     using Matrix = typename SparseMatrixAdapter::IstlMatrix;
     using ThreadManager = GetPropType<TypeTag, Properties::ThreadManager>;
+    using GridView = GetPropType<TypeTag, Properties::GridView>;
     using ElementContext = GetPropType<TypeTag, Properties::ElementContext>;
+    using ElementChunksType = Opm::ElementChunks<GridView, Dune::Partitions::Interior>;
 
     using real_type = typename Vector::field_type;
 
@@ -90,6 +93,12 @@ public:
             OPM_THROW(std::logic_error, "Well operators are currently not supported for the GPU backend. "
             "Use --matrix-add-well-contributions=true to add well contributions to the matrix instead.");
         }
+
+        // Initialize element_chunks
+        m_element_chunks = std::make_unique<ElementChunksType>(
+            simulator.vanguard().gridView(),
+            Dune::Partitions::interior,
+            ThreadManager::maxThreads());
     }
 
     /// Construct a system solver.
@@ -164,14 +173,14 @@ public:
         if (!m_gpuSolver) {
             OPM_THROW(std::runtime_error, "m_gpuFlexibleSolver not initialized, prepare(matrix, rhs); needs to be called");
         }
-    
+
         if (!m_x) {
             m_x = std::make_unique<GPUVector>(x);
         } else {
             m_x->copyFromHost(x);
         }
         m_gpuSolver->apply(*m_x, *m_rhs, result);
-    
+
         m_x->copyToHost(x);
 
         ++m_solveCount;
@@ -230,12 +239,12 @@ private:
             if (weightsType == "quasiimpes") {
                 m_weights = std::make_unique<GPUVector>(m_matrix->N() * m_matrix->blockSize());
                 // Pre-compute diagonal indices once when setting up the calculator
-                auto diagonalIndices = Opm::Amg::precomputeDiagonalIndices(*m_matrix);
+                auto diagonalIndices = ::Opm::Amg::precomputeDiagonalIndices(*m_matrix);
                 m_diagonalIndices = std::make_unique<GPUVectorInt>(diagonalIndices);
 
-                weightsCalculator = [this, transpose]() -> GPUVector& {
+                weightsCalculator = [this, transpose]() -> GPUVector& { 
                     // GPU implementation for quasiimpes weights
-                    Amg::getQuasiImpesWeights(*m_matrix, pressureIndex, transpose, *m_weights, *m_diagonalIndices);
+                    ::Opm::Amg::getQuasiImpesWeights(*m_matrix, pressureIndex, transpose, *m_weights, *m_diagonalIndices);
                     return *m_weights;
                 };
             } else if (weightsType == "trueimpes") {
@@ -245,13 +254,14 @@ private:
 
                 // CPU implementation wrapped for GPU
                 weightsCalculator = [this]() -> GPUVector& {
-
                     // Use the CPU implementation to calculate the weights
                     ElementContext elemCtx(m_simulator);
-                    Amg::getTrueImpesWeights(pressureIndex, m_cpuWeights,
-                                             m_simulator.vanguard().gridView(),
-                                             elemCtx, m_simulator.model(),
-                                             ThreadManager::threadId());
+
+                    ::Opm::Amg::getTrueImpesWeights(pressureIndex, m_cpuWeights,
+                                                 elemCtx, m_simulator.model(),
+                                                 *m_element_chunks,
+                                                  ThreadManager::threadId());
+
                     // Copy CPU vector to GPU vector
                     m_weights->copyFromHost(m_cpuWeights);
                     return *m_weights;
@@ -263,13 +273,14 @@ private:
 
                 // CPU implementation wrapped for GPU
                 weightsCalculator = [this]() -> GPUVector& {
-
                     // Use the CPU implementation to calculate the weights
                     ElementContext elemCtx(m_simulator);
-                    Amg::getTrueImpesWeightsAnalytic(pressureIndex, m_cpuWeights,
-                                                     m_simulator.vanguard().gridView(),
-                                                     elemCtx, m_simulator.model(),
-                                                     ThreadManager::threadId());
+
+                    ::Opm::Amg::getTrueImpesWeightsAnalytic(pressureIndex, m_cpuWeights,
+                                                 elemCtx, m_simulator.model(),
+                                                 *m_element_chunks,
+                                                 ThreadManager::threadId());
+
                     // Copy CPU vector to GPU vector
                     m_weights->copyFromHost(m_cpuWeights);
                     return *m_weights;
@@ -295,7 +306,7 @@ private:
         } else {
             m_matrix->updateNonzeroValues(M);
         }
-    
+
         m_gpuSolver->update();
     }
 
@@ -326,6 +337,8 @@ private:
     Vector m_cpuWeights;
     std::unique_ptr<GPUVector> m_weights;
     std::unique_ptr<GPUVectorInt> m_diagonalIndices;
+
+    std::unique_ptr<ElementChunksType> m_element_chunks;
 
 };
 } // namespace Opm::gpuistl
