@@ -106,18 +106,18 @@ public:
         HYPRE_BoomerAMGSetTol(solver_, prm.get<double>("tolerance", 0.0));
 
         if (use_gpu_) {
-            HYPRE_BoomerAMGSetRelaxType(solver_, 16);
-            HYPRE_BoomerAMGSetCoarsenType(solver_, 8);
-            HYPRE_BoomerAMGSetAggNumLevels(solver_, 0);
-            HYPRE_BoomerAMGSetAggInterpType(solver_, 6);
+            HYPRE_BoomerAMGSetRelaxType(solver_, prm.get<int>("relax_type", 16));
+            HYPRE_BoomerAMGSetCoarsenType(solver_, prm.get<int>("coarsen_type", 8));
+            HYPRE_BoomerAMGSetAggNumLevels(solver_, prm.get<int>("agg_num_levels", 0));
+            HYPRE_BoomerAMGSetAggInterpType(solver_, prm.get<int>("agg_interp_type", 6));
             // Keep transpose to avoid SpMTV
             HYPRE_BoomerAMGSetKeepTranspose(solver_, true);
         }
         else {
-            HYPRE_BoomerAMGSetRelaxType(solver_, prm.get<int>("relax_type", 13));
-            HYPRE_BoomerAMGSetCoarsenType(solver_, prm.get<int>("coarsen_type", 10));
-            HYPRE_BoomerAMGSetAggNumLevels(solver_, prm.get<int>("agg_num_levels", 1));
-            HYPRE_BoomerAMGSetAggInterpType(solver_, prm.get<int>("agg_interp_type", 4));
+            HYPRE_BoomerAMGSetRelaxType(solver_, prm.get<int>("relax_type", prm.get<int>("relax_type", 13)));
+            HYPRE_BoomerAMGSetCoarsenType(solver_, prm.get<int>("coarsen_type", prm.get<int>("coarsen_type", 10)));
+            HYPRE_BoomerAMGSetAggNumLevels(solver_, prm.get<int>("agg_num_levels", prm.get<int>("agg_num_levels", 1)));
+            HYPRE_BoomerAMGSetAggInterpType(solver_, prm.get<int>("agg_interp_type", prm.get<int>("agg_interp_type", 4)));
         }
 
         // Create Hypre vectors
