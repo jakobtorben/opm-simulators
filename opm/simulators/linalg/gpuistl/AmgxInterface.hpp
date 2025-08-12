@@ -23,6 +23,7 @@
 #include <opm/common/ErrorMacros.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
+#include <opm/simulators/linalg/gpuistl/detail/gpu_type_detection.hpp>
 
 #include <amgx_c.h>
 #include <cuda_runtime.h>
@@ -102,18 +103,7 @@ inline void amgxSafeCall(AMGX_RC rc,
 #define OPM_AMGX_SAFE_CALL(expr) \
     ::Opm::gpuistl::amgxSafeCall((expr), #expr, __FILE__, __func__, __LINE__)
 
-/**
- * @brief Type trait to detect if a type is a GPU type
- */
-template<typename T>
-struct is_gpu_type : std::false_type {};
 
-// Specialize for known GPU types
-template<typename T>
-struct is_gpu_type<GpuVector<T>> : std::true_type {};
-
-template<typename T>
-struct is_gpu_type<GpuSparseMatrix<T>> : std::true_type {};
 
 /**
  * @brief Unified interface for AMGX operations with both CPU and GPU data structures

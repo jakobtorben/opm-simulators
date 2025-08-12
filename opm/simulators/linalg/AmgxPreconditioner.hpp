@@ -25,8 +25,6 @@
 #include <opm/common/TimingMacros.hpp>
 #include <opm/simulators/linalg/PreconditionerWithUpdate.hpp>
 #include <opm/simulators/linalg/PropertyTree.hpp>
-#include <opm/simulators/linalg/gpuistl/GpuSparseMatrix.hpp>
-#include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
 #include <opm/simulators/linalg/gpuistl/AmgxInterface.hpp>
 
 #include <dune/common/fmatrix.hh>
@@ -36,8 +34,7 @@
 
 namespace Amgx {
 
-namespace gpuistl = Opm::gpuistl;
-using AmgxInterface = gpuistl::AmgxInterface;
+using AmgxInterface = Opm::gpuistl::AmgxInterface;
 
 /**
  * @brief Configuration structure for AMGX parameters.
