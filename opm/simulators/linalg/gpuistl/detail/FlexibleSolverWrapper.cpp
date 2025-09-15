@@ -35,7 +35,8 @@ namespace
     template <class Matrix, class Vector, class Comm>
     std::tuple<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractOperatorPtrType,
                typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractSolverPtrType,
-               std::reference_wrapper<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractPreconditionerType>>
+               std::reference_wrapper<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractPreconditionerType>,
+               std::shared_ptr<void>>
     createOperatorAndSolver(const Matrix& matrix,
                             [[maybe_unused]] bool parallel,
                             const PropertyTree& prm,
@@ -54,15 +55,16 @@ namespace
             auto solverPtr = std::make_unique<SolverType>(*operatorPtr, prm, weightCalculator, pressureIndex);
             auto preconditioner = std::ref(solverPtr->preconditioner());
 
-            return std::make_tuple(std::move(operatorPtr), std::move(solverPtr), preconditioner);
-        } 
+            return std::make_tuple(std::move(operatorPtr), std::move(solverPtr), preconditioner, nullptr);
+        }
 #if HAVE_MPI
         else {
             using real_type = typename Matrix::field_type;
             using return_type = std::tuple<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractOperatorPtrType,
-               typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractSolverPtrType,
-               std::reference_wrapper<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractPreconditionerType>>;
-            
+            typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractSolverPtrType,
+            std::reference_wrapper<typename FlexibleSolverWrapper<Matrix, Vector, Comm>::AbstractPreconditionerType>,
+            std::shared_ptr<void>>;
+
             // We need the block size at compile time to instantiate the correct types
             // hence we need to dispatch on the block size
             return matrix.dispatchOnBlocksize([&](auto blockSizeVal) -> return_type {
@@ -75,9 +77,9 @@ namespace
                 using CudaCommunication = GpuOwnerOverlapCopy<real_type, Comm>;
                 using SchwarzOperator
                     = Dune::OverlappingSchwarzOperator<GpuSparseMatrix<real_type>, Vector, Vector, CudaCommunication>;
-                
+  
                 using SolverType = Dune::FlexibleSolver<SchwarzOperator>;
-                
+
                 // Create the communication object that will handle the GPU and MPI communication
                 auto cudaCommunication = makeGpuOwnerOverlapCopy<real_type, block_size, Comm>(*comm);
                 // Create the operator that will (through the communication object) handle the
@@ -87,7 +89,8 @@ namespace
                 auto preconditioner = std::ref(solverPtr->preconditioner());
 
                 return std::make_tuple(
-                    std::move(operatorPtr), std::move(solverPtr), preconditioner);
+                    std::move(operatorPtr), std::move(solverPtr), preconditioner,
+                    std::static_pointer_cast<void>(cudaCommunication));
             });
         }
 #else
@@ -114,11 +117,12 @@ FlexibleSolverWrapper<Matrix, Vector, Comm>::FlexibleSolverWrapper(const Matrix&
 
 template <class Matrix, class Vector, class Comm>
 FlexibleSolverWrapper<Matrix, Vector, Comm>::FlexibleSolverWrapper(
-    std::tuple<AbstractOperatorPtrType, AbstractSolverPtrType, std::reference_wrapper<AbstractPreconditionerType>>&&
+    std::tuple<AbstractOperatorPtrType, AbstractSolverPtrType, std::reference_wrapper<AbstractPreconditionerType>, std::shared_ptr<void>>&&
         solverTuple)
     : m_operator(std::move(std::get<0>(solverTuple)))
     , m_solver(std::move(std::get<1>(solverTuple)))
     , m_preconditioner(std::get<2>(solverTuple))
+    , m_gpuCommunication(std::get<3>(solverTuple))
 {
 }
 

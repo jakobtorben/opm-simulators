@@ -65,9 +65,10 @@ private:
     AbstractSolverPtrType m_solver;
 
     AbstractPreconditionerType& m_preconditioner;
+    std::shared_ptr<void> m_gpuCommunication;
 
     FlexibleSolverWrapper(
-        std::tuple<AbstractOperatorPtrType, AbstractSolverPtrType, std::reference_wrapper<AbstractPreconditionerType>>&&
+        std::tuple<AbstractOperatorPtrType, AbstractSolverPtrType, std::reference_wrapper<AbstractPreconditionerType>, std::shared_ptr<void>>&&
             solverTuple);
 };
 } // namespace Opm::gpuistl::detail
