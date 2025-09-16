@@ -210,7 +210,10 @@ private:
     CoarseSolverPolicy coarseSolverPolicy_;
     TwoLevelMethod twolevel_method_;
     Opm::PropertyTree prm_;
-    Communication dummy_comm_;
+    // Only used in serial case
+    std::conditional_t<std::is_same_v<Communication, Dune::Amg::SequentialInformation>,
+                      Communication,
+                      std::nullptr_t> dummy_comm_;
 };
 
 } // namespace Dune

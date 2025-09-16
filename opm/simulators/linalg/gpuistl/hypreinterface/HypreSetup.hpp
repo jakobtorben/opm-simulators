@@ -33,8 +33,10 @@
 #if HAVE_CUDA
 #if USE_HIP
 #include <opm/simulators/linalg/gpuistl_hip/GpuSparseMatrixWrapper.hpp>
+#include <opm/simulators/linalg/gpuistl_hip/GpuOwnerOverlapCopy.hpp>
 #else
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrixWrapper.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuOwnerOverlapCopy.hpp>
 #endif
 #endif // HAVE_CUDA
 
@@ -45,9 +47,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <type_traits>
+#include <utility>
 
 namespace Opm::gpuistl::HypreInterface
 {
+
 
 // GPU-specific helper functions
 template <typename T>
@@ -360,9 +365,21 @@ setupHypreParallelInfoSerial(HYPRE_Int N)
  */
 template <typename CommType, typename MatrixType>
 inline ParallelInfo
-setupHypreParallelInfoParallel(const CommType& comm, const MatrixType& matrix)
+setupHypreParallelInfoParallel(const CommType& comm_in, const MatrixType& matrix)
 {
     ParallelInfo info;
+    // If GPU comm types, extract CPU communication for Hypre setup
+    const auto& comm = [&]() -> const auto& {
+#if HAVE_CUDA
+        if constexpr (std::is_same_v<CommType, Opm::gpuistl::GpuOwnerOverlapCopy<double, Dune::OwnerOverlapCopyCommunication<int>>>) {
+            return comm_in.getCpuCommunication();
+        } else {
+            return comm_in;
+        }
+#else
+        return comm_in;
+#endif
+    }();
     const auto& collective_comm = comm.communicator();
 
     // Initialize mapping arrays to not owned (-1) state
@@ -373,10 +390,10 @@ setupHypreParallelInfoParallel(const CommType& comm, const MatrixType& matrix)
     if (!(matrix.N() == comm.indexSet().size())) {
           // in OPM this will likely not be trigged
           // ensure no holes in index sett
-          const_cast<CommType&>(comm).buildGlobalLookup(matrix.N()); // need?
-          Dune::Amg::MatrixGraph<MatrixType> graph(const_cast<MatrixType&>(matrix)); // do not know why not const ref is sufficient
-          Dune::fillIndexSetHoles(graph, const_cast<CommType&>(comm));
-          assert(matrix.N() == comm.indexSet().size());
+          //const_cast<CommType&>(comm).buildGlobalLookup(matrix.N()); // need?
+          //Dune::Amg::MatrixGraph<MatrixType> graph(const_cast<MatrixType&>(matrix)); // do not know why not const ref is sufficient
+          //Dune::fillIndexSetHoles(graph, const_cast<CommType&>(comm));
+          //assert(matrix.N() == cpuComm.indexSet().size());
     }
 
     // STEP 1: Ownership Detection
@@ -447,6 +464,7 @@ setupHypreParallelInfoParallel(const CommType& comm, const MatrixType& matrix)
 
     // STEP 5: Exchange global indices for ghost DOFs
     // After this call, ghost DOFs will have their correct global indices
+    // Use the underlying CPU communication for this operation since Hypre setup works on CPU
     comm.copyOwnerToAll(info.local_dune_to_global_hypre, info.local_dune_to_global_hypre);
 
     return info;

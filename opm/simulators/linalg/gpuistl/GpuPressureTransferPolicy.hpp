@@ -22,6 +22,7 @@
 
 #include <opm/simulators/linalg/PropertyTree.hpp>
 #include <opm/simulators/linalg/WellOperators.hpp>
+#include <opm/simulators/linalg/gpuistl/GpuOwnerOverlapCopy.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuSparseMatrixWrapper.hpp>
 #include <opm/simulators/linalg/gpuistl/GpuVector.hpp>
 #include <opm/simulators/linalg/gpuistl/detail/cpr_amg_operations.hpp>
@@ -38,11 +39,21 @@ namespace Details
     template <class Scalar>
     using GpuPressureVectorType = gpuistl::GpuVector<Scalar>;
     template <class Scalar>
-    using GpuSeqCoarseOperatorType = Dune::
-        MatrixAdapter<GpuPressureMatrixType<Scalar>, GpuPressureVectorType<Scalar>, GpuPressureVectorType<Scalar>>;
+    using GpuSeqCoarseOperatorType = Dune::MatrixAdapter<GpuPressureMatrixType<Scalar>,
+                                     GpuPressureVectorType<Scalar>,
+                                     GpuPressureVectorType<Scalar>>;
 
     template <class Scalar, class Comm>
-    using GpuCoarseOperatorType = GpuSeqCoarseOperatorType<Scalar>;
+
+    using GpuParCoarseOperatorType
+        = Dune::OverlappingSchwarzOperator<GpuPressureMatrixType<Scalar>,
+                                      GpuPressureVectorType<Scalar>,
+                                      GpuPressureVectorType<Scalar>,
+                                      Comm>;
+    template <class Scalar, class Comm>
+    using GpuCoarseOperatorType = std::conditional_t<std::is_same<Comm, Dune::Amg::SequentialInformation>::value,
+                                                  GpuSeqCoarseOperatorType<Scalar>,
+                                                  GpuParCoarseOperatorType<Scalar, Comm>>;
 } // namespace Details
 } // namespace Opm
 
@@ -82,13 +93,29 @@ public:
 
         // Calculate entries for coarse matrix
         calculateCoarseEntries(fineOperator);
-        coarseLevelCommunication_.reset(communication_, [](Communication*) {});
+
+        // Create coarse level communication with block size 1
+        if constexpr (std::is_same_v<Communication, Dune::Amg::SequentialInformation>) {
+            coarseLevelCommunication_.reset(communication_, [](Communication*) {});
+        } else {
+            // For GPU MPI case, we need to create a new communication object with block size 1
+            // Extract the CPU communication from the fine level GPU communication
+            const auto& cpuCommunication = communication_->getCpuCommunication();
+            // Create new GPU communication with block size 1 for the coarse system
+            coarseLevelCommunication_ = makeGpuOwnerOverlapCopy<Scalar, 1>(cpuCommunication);
+        }
 
         this->lhs_.resize(coarseLevelMatrix_->N());
         this->rhs_.resize(coarseLevelMatrix_->N());
 
         // Create a MatrixAdapter that wraps the matrix without copying it
-        this->operator_ = std::make_shared<CoarseOperator>(*coarseLevelMatrix_);
+        // For GPU MPI case, we need to pass the communication object
+        if constexpr (std::is_same_v<Communication, Dune::Amg::SequentialInformation>) {
+            this->operator_ = std::make_shared<CoarseOperator>(*coarseLevelMatrix_);
+        } else {
+            // For GPU MPI case, pass the GPU communication object directly
+            this->operator_ = std::make_shared<CoarseOperator>(*coarseLevelMatrix_, *coarseLevelCommunication_);
+        }
     }
 
     void calculateCoarseEntries(const FineOperator& fineOperator) override

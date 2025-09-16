@@ -95,12 +95,60 @@ struct StandardPreconditioners<Operator, Comm, typename std::enable_if_t<Opm::is
                 return std::make_shared<gpuistl::GpuBlockPreconditioner<V, V, C>>(gpuPrec, comm);
             });
         });
+
+#if HAVE_HYPRE && HYPRE_USING_CUDA || HYPRE_USING_HIP
+         // Only register Hypre preconditioner for double precision
+        if constexpr (std::is_same_v<HYPRE_Real, typename V::field_type>) {
+            F::addCreator("hypre", [](const O& op, const P& prm, const std::function<V()>&, std::size_t, const C& comm) {
+                // Only create Hypre preconditioner for scalar matrices
+                if (op.getmat().blockSize() == 1) {
+                        return std::make_shared<Hypre::HyprePreconditioner<M, V, V, C>>(op.getmat(), prm, comm);
+                    } else {
+                        OPM_THROW(std::logic_error, "Hypre preconditioner only works with scalar matrices (block size 1).");
+                    }
+                });
+        }
+#endif
+        if constexpr (std::is_same_v<O, Dune::OverlappingSchwarzOperator<M, V, V, C>>) {
+            F::addCreator(
+                "cpr",
+                [](const O& op,
+                   const P& prm,
+                   const std::function<V()> weightsCalculator,
+                   std::size_t pressureIndex,
+                   const C& comm) {
+                    assert(weightsCalculator);
+                    if (pressureIndex == std::numeric_limits<std::size_t>::max()) {
+                        OPM_THROW(std::logic_error, "Pressure index out of bounds. It needs to specified for CPR");
+                    }
+                    using Scalar = typename V::field_type;
+                    using GpuVector = gpuistl::GpuVector<Scalar>;
+                    using LevelTransferPolicy = Opm::gpuistl::GpuPressureTransferPolicy<O, C, Scalar, false>;
+                    return std::make_shared<Dune::OwningTwoLevelPreconditioner<O, GpuVector, LevelTransferPolicy, C>>(
+                        op, prm, weightsCalculator, pressureIndex, comm);
+                });
+
+            F::addCreator(
+                "cprt",
+                [](const O& op,
+                   const P& prm,
+                   const std::function<V()> weightsCalculator,
+                   std::size_t pressureIndex,
+                   const C& comm) {
+                    assert(weightsCalculator);
+                    if (pressureIndex == std::numeric_limits<std::size_t>::max()) {
+                        OPM_THROW(std::logic_error, "Pressure index out of bounds. It needs to specified for CPR");
+                    }
+                    using Scalar = typename V::field_type;
+                    using GpuVector = gpuistl::GpuVector<Scalar>;
+                    using LevelTransferPolicy = Opm::gpuistl::GpuPressureTransferPolicy<O, C, Scalar, true>;
+                    return std::make_shared<Dune::OwningTwoLevelPreconditioner<O, GpuVector, LevelTransferPolicy, C>>(
+                        op, prm, weightsCalculator, pressureIndex, comm);
+                });
+        }
 #endif // HAVE_CUDA
     }
-
 };
-
-
 }// namespace Opm
 
 
