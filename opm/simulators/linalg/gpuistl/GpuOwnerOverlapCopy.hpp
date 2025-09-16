@@ -90,6 +90,15 @@ public:
         return m_sender->communicator();
     }
 
+    /**
+     * @brief indexSet returns the index set from the underlying CPU communication
+     * @return the index set
+     */
+    const auto& indexSet() const
+    {
+        return m_sender->getCpuCommunication().indexSet();
+    }
+
 private:
     std::shared_ptr<GPUSender<field_type, OwnerOverlapCopyCommunicationType>> m_sender;
 };

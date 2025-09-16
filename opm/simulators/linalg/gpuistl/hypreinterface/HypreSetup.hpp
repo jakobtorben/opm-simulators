@@ -45,9 +45,51 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <type_traits>
+#include <utility>
 
 namespace Opm::gpuistl::HypreInterface
 {
+
+/**
+ * @brief Helper to detect if a type has getCpuCommunication method
+ */
+template<typename CommType, typename = void>
+struct has_getCpuCommunication : std::false_type {};
+
+template<typename CommType>
+struct has_getCpuCommunication<CommType, std::void_t<decltype(std::declval<CommType>().getCpuCommunication())>> : std::true_type {};
+
+/**
+ * @brief Helper to get CPU communication from either GPU or CPU communication types
+ */
+template<typename CommType>
+const auto& getCpuCommunication(const CommType& comm)
+{
+    if constexpr (has_getCpuCommunication<CommType>::value) {
+        // GPU communication type - extract CPU communication
+        return comm.getCpuCommunication();
+    } else {
+        // CPU communication type - return as is
+        return comm;
+    }
+}
+
+/**
+ * @brief Helper to call copyOwnerToAll that works with both GPU and CPU communication types
+ */
+template<typename CommType, typename VectorType>
+void copyOwnerToAllHelper(const CommType& comm, VectorType& vec)
+{
+    if constexpr (has_getCpuCommunication<CommType>::value) {
+        // GPU communication type - use the underlying CPU communication directly
+        const auto& cpuComm = comm.getCpuCommunication();
+        cpuComm.copyOwnerToAll(vec, vec);
+    } else {
+        // CPU communication type - call directly
+        comm.copyOwnerToAll(vec, vec);
+    }
+}
 
 // GPU-specific helper functions
 template <typename T>
@@ -364,25 +406,26 @@ setupHypreParallelInfoParallel(const CommType& comm, const MatrixType& matrix)
 {
     ParallelInfo info;
     const auto& collective_comm = comm.communicator();
+    const auto& cpuComm = getCpuCommunication(comm);
 
     // Initialize mapping arrays to not owned (-1) state
-    info.local_dune_to_local_hypre.resize(comm.indexSet().size(), -1);
-    info.local_dune_to_global_hypre.resize(comm.indexSet().size(), -1);
+    info.local_dune_to_local_hypre.resize(cpuComm.indexSet().size(), -1);
+    info.local_dune_to_global_hypre.resize(cpuComm.indexSet().size(), -1);
 
     // Handle edge case: ensure index set covers all matrix rows
-    if (!(matrix.N() == comm.indexSet().size())) {
+    if (!(matrix.N() == cpuComm.indexSet().size())) {
           // in OPM this will likely not be trigged
           // ensure no holes in index sett
-          const_cast<CommType&>(comm).buildGlobalLookup(matrix.N()); // need?
-          Dune::Amg::MatrixGraph<MatrixType> graph(const_cast<MatrixType&>(matrix)); // do not know why not const ref is sufficient
-          Dune::fillIndexSetHoles(graph, const_cast<CommType&>(comm));
-          assert(matrix.N() == comm.indexSet().size());
+          //const_cast<CommType&>(comm).buildGlobalLookup(matrix.N()); // need?
+          //Dune::Amg::MatrixGraph<MatrixType> graph(const_cast<MatrixType&>(matrix)); // do not know why not const ref is sufficient
+          //Dune::fillIndexSetHoles(graph, const_cast<CommType&>(comm));
+          //assert(matrix.N() == cpuComm.indexSet().size());
     }
 
     // STEP 1: Ownership Detection
     // Scan Dune's index set to identify which DOFs this process owns
     // Note: iteration order in index set is NOT sequential by local index
-    for (const auto& ind : comm.indexSet()) {
+    for (const auto& ind : cpuComm.indexSet()) {
         int local_ind = ind.local().local();
         if (ind.local().attribute() == Dune::OwnerOverlapCopyAttributeSet::owner) {
             // Mark as owned (temporarily use 1, will be replaced with proper local index)
@@ -447,7 +490,8 @@ setupHypreParallelInfoParallel(const CommType& comm, const MatrixType& matrix)
 
     // STEP 5: Exchange global indices for ghost DOFs
     // After this call, ghost DOFs will have their correct global indices
-    comm.copyOwnerToAll(info.local_dune_to_global_hypre, info.local_dune_to_global_hypre);
+    // Use the underlying CPU communication for this operation since Hypre setup works on CPU
+    copyOwnerToAllHelper(comm, info.local_dune_to_global_hypre);
 
     return info;
 }

@@ -38,11 +38,21 @@ namespace Details
     template <class Scalar>
     using GpuPressureVectorType = gpuistl::GpuVector<Scalar>;
     template <class Scalar>
-    using GpuSeqCoarseOperatorType = Dune::
-        MatrixAdapter<GpuPressureMatrixType<Scalar>, GpuPressureVectorType<Scalar>, GpuPressureVectorType<Scalar>>;
+    using GpuSeqCoarseOperatorType = Dune::MatrixAdapter<GpuPressureMatrixType<Scalar>,
+                                     GpuPressureVectorType<Scalar>,
+                                     GpuPressureVectorType<Scalar>>;
 
     template <class Scalar, class Comm>
-    using GpuCoarseOperatorType = GpuSeqCoarseOperatorType<Scalar>;
+
+    using GpuParCoarseOperatorType
+        = Opm::GhostLastMatrixAdapter<GpuPressureMatrixType<Scalar>,
+                                      GpuPressureVectorType<Scalar>,
+                                      GpuPressureVectorType<Scalar>,
+                                      Comm>;
+    template <class Scalar, class Comm>
+    using GpuCoarseOperatorType = std::conditional_t<std::is_same<Comm, Dune::Amg::SequentialInformation>::value,
+                                                  GpuSeqCoarseOperatorType<Scalar>,
+                                                  GpuParCoarseOperatorType<Scalar, Comm>>;
 } // namespace Details
 } // namespace Opm
 

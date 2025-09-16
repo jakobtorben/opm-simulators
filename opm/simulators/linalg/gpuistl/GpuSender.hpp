@@ -119,6 +119,15 @@ public:
         return m_cpuOwnerOverlapCopy.communicator();
     }
 
+    /**
+     * @brief getCpuCommunication returns the underlying CPU communication object
+     * @return reference to the CPU communication object
+     */
+    const OwnerOverlapCopyCommunicationType& getCpuCommunication() const
+    {
+        return m_cpuOwnerOverlapCopy;
+    }
+
 protected:
     // Used to call the initIndexSet. Note that this is kind of a
     // premature optimization, in the sense that we could just initialize these indices
