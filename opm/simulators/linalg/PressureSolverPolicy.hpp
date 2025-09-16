@@ -82,6 +82,21 @@ namespace Amg
                                                       /* pressureIndex = */ 1);
             }
 
+            // Constructor for GPU communication case
+            template<typename GpuComm>
+            PressureInverseOperator(Operator& op,
+                                    const Opm::PropertyTree& prm,
+                                    const GpuComm& gpuComm)
+                : linsolver_()
+            {
+                static_assert(std::is_same_v<GpuComm, typename Operator::communication_type>, 
+                             "GpuComm must match Operator communication type");
+                assert(op.category() == Dune::SolverCategory::overlapping);
+                // Use GPU communication directly
+                linsolver_ = std::make_unique<Solver>(op, gpuComm, prm, std::function<X()>(),
+                                                      /* pressureIndex = */ 1);
+            }
+
 
             Dune::SolverCategory::Category category() const override
             {
