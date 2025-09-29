@@ -357,6 +357,10 @@ private:
     Scalar maxResidualAllowed() const { return param_.max_residual_allowed_; }
     double linear_solve_setup_time_;
     std::vector<bool> wasSwitched_;
+    
+    // Persistent vectors to avoid memory reallocation during Newton iterations
+    mutable BVector newton_update_;      //!< Persistent vector for Newton updates
+    mutable BVector speed_test_update_;  //!< Persistent vector for speed test comparisons
 };
 
 } // namespace Opm

@@ -270,8 +270,11 @@ nonlinearIterationNewton(const int iteration,
         report.total_newton_iterations = 1;
 
         // Compute the nonlinear update.
+        // Reuse persistent vector to avoid memory reallocation
         unsigned nc = simulator_.model().numGridDof();
-        BVector x(nc);
+        if (newton_update_.size() != nc) {
+            newton_update_.resize(nc);
+        }
 
         // Solve the linear system.
         linear_solve_setup_time_ = 0.0;
@@ -283,7 +286,7 @@ nonlinearIterationNewton(const int iteration,
                                   simulator().model().linearizer().residual());
 
             // ---- Solve linear system ----
-            solveJacobianSystem(x);
+            solveJacobianSystem(newton_update_);
 
             report.linear_solve_setup_time += linear_solve_setup_time_;
             report.linear_solve_time += perfTimer.stop();
@@ -304,7 +307,7 @@ nonlinearIterationNewton(const int iteration,
         // handling well state update before oscillation treatment is a decision based
         // on observation to avoid some big performance degeneration under some circumstances.
         // there is no theorectical explanation which way is better for sure.
-        wellModel().postSolve(x);
+        wellModel().postSolve(newton_update_);
 
         if (param_.use_update_stabilization_) {
             // Stabilize the nonlinear update.
@@ -324,13 +327,13 @@ nonlinearIterationNewton(const int iteration,
                     OpmLog::info(msg);
                 }
             }
-            nonlinear_solver.stabilizeNonlinearUpdate(x, dx_old_, current_relaxation_);
+            nonlinear_solver.stabilizeNonlinearUpdate(newton_update_, dx_old_, current_relaxation_);
         }
 
         // ---- Newton update ----
         // Apply the update, with considering model-dependent limitations and
         // chopping of the update.
-        updateSolution(x);
+        updateSolution(newton_update_);
 
         report.update_time += perfTimer.stop();
     }
@@ -471,10 +474,14 @@ solveJacobianSystem(BVector& x)
         std::vector<double> times(numSolvers);
         std::vector<double> setupTimes(numSolvers);
 
-        x = 0.0;
-        std::vector<BVector> x_trial(numSolvers, x);
+        // Reuse persistent vector to avoid memory reallocation
+        if (speed_test_update_.size() != x.size()) {
+            speed_test_update_.resize(x.size());
+        }
+        speed_test_update_ = 0.0;
+        std::vector<BVector> x_trial(numSolvers, speed_test_update_);
         for (int solver = 0; solver < numSolvers; ++solver) {
-            BVector x0(x);
+            BVector x0(speed_test_update_);
             linSolver.setActiveSolver(solver);
             perfTimer.start();
             linSolver.prepare(jacobian, residual);

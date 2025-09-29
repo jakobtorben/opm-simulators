@@ -544,14 +544,17 @@ private:
         do {
             // Solve local linear system.
             // Note that x has full size, we expect it to be nonzero only for in-domain cells.
+            // Reuse persistent vector to avoid memory reallocation
             const int nc = grid.size(0);
-            BVector x(nc);
+            if (domain_newton_update_.size() != nc) {
+                domain_newton_update_.resize(nc);
+            }
             detailTimer.reset();
             detailTimer.start();
-            this->solveJacobianSystemDomain(domain, x);
-            model_.wellModel().postSolveDomain(x, domain);
+            this->solveJacobianSystemDomain(domain, domain_newton_update_);
+            model_.wellModel().postSolveDomain(domain_newton_update_, domain);
             if (damping_factor != 1.0) {
-                x *= damping_factor;
+                domain_newton_update_ *= damping_factor;
             }
             local_report.linear_solve_time += detailTimer.stop();
             local_report.linear_solve_setup_time += model_.linearSolveSetupTime();
@@ -560,7 +563,7 @@ private:
             // Update local solution. // TODO: x is still full size, should we optimize it?
             detailTimer.reset();
             detailTimer.start();
-            this->updateDomainSolution(domain, x);
+            this->updateDomainSolution(domain, domain_newton_update_);
             local_report.update_time += detailTimer.stop();
 
             // Assemble well and reservoir.
@@ -1183,6 +1186,8 @@ private:
     std::vector<Scalar> previousMobilities_;
     // Flag indicating if this domain should be solved in the next iteration
     std::vector<bool> domain_needs_solving_;
+    // Persistent vector to avoid memory reallocation during domain Newton iterations
+    BVector domain_newton_update_;
 };
 
 } // namespace Opm
