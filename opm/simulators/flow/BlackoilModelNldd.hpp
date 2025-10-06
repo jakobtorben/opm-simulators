@@ -62,6 +62,9 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <set>
@@ -270,6 +273,7 @@ public:
         // -----------   Solve each domain separately   -----------
         DeferredLogger logger;
         std::vector<SimulatorReportSingle> domain_reports(domains_.size());
+        std::vector<int> local_nonlinear_iters(domains_.size(), 0);  // Track local iterations for this NLDD iteration
         for (const int domain_index : domain_order) {
             const auto& domain = domains_[domain_index];
             SimulatorReportSingle local_report;
@@ -312,6 +316,7 @@ public:
             }
             local_report.solver_time += detailTimer.stop();
             domain_reports[domain.index] = local_report;
+            local_nonlinear_iters[domain.index] = local_report.total_newton_iterations;
         }
         detailTimer.reset();
         detailTimer.start();
@@ -356,6 +361,9 @@ public:
             }
             num_local_newtons = step_newtons;
         }
+
+        // Update the domain ordering history with the local iteration counts from this NLDD iteration
+        updateLastOrderingWithLocalIterations(local_nonlinear_iters);
 
         if (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
             solution = locally_solved;
@@ -472,6 +480,32 @@ public:
             grid,
             elementMapper,
             cartMapper);
+    }
+
+    /// Analyze and write domain neighborhood structure to file
+    void writeDomainNeighborhoods(const std::filesystem::path& odir) const
+    {
+        try {
+            OpmLog::info("Analyzing domain neighborhoods...");
+            const auto neighborhood_data = analyzeDomainNeighborhoods();
+            OpmLog::info("Writing domain neighborhood data to: " + odir.string());
+            writeDomainNeighborhoodsToFile(odir, neighborhood_data);
+            OpmLog::info("Domain neighborhood analysis complete.");
+        } catch (const std::exception& e) {
+            OpmLog::error("Error writing domain neighborhoods: " + std::string(e.what()));
+        }
+    }
+
+    /// Write domain ordering history to file
+    void writeDomainOrderingHistory(const std::filesystem::path& odir) const
+    {
+        try {
+            OpmLog::info("Writing domain ordering history...");
+            writeDomainOrderingToFile(odir);
+            OpmLog::info("Domain ordering history written.");
+        } catch (const std::exception& e) {
+            OpmLog::error("Error writing domain ordering history: " + std::string(e.what()));
+        }
     }
 
 private:
@@ -884,6 +918,7 @@ private:
 
         if (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
             // Do nothing, 0..n-1 order is fine.
+            storeDomainOrdering(domain_order);
             return domain_order;
         } else if (model_.param().local_solve_approach_ == DomainSolveApproach::GaussSeidel) {
             // Calculate the measure used to order the domains.
@@ -932,6 +967,10 @@ private:
             const auto& m = measure_per_domain;
             std::stable_sort(domain_order.begin(), domain_order.end(),
                              [&m](const int i1, const int i2){ return m[i1] > m[i2]; });
+
+            // Store the ordering and measures for later analysis
+            storeDomainOrdering(domain_order, measure_per_domain);
+
             return domain_order;
         } else {
             throw std::logic_error("Domain solve approach must be Jacobi or Gauss-Seidel");
@@ -1170,6 +1209,366 @@ private:
         return false;
     }
 
+    //! \brief Structure to hold domain neighborhood information
+    struct DomainNeighborhoodData {
+        // Map from domain index to set of neighboring domain indices
+        std::map<int, std::set<int>> domain_neighbors;
+        // Map from domain index to number of cells in that domain
+        std::map<int, int> domain_sizes;
+        // Map from domain index to a map of (neighbor_domain -> number of connections)
+        std::map<int, std::map<int, int>> domain_connection_counts;
+        // Map from cell index to domain index
+        std::map<int, int> cell_to_domain;
+    };
+
+    //! \brief Analyze the neighborhood structure between domains
+    DomainNeighborhoodData analyzeDomainNeighborhoods() const
+    {
+        DomainNeighborhoodData data;
+        const auto& grid = model_.simulator().vanguard().grid();
+        const auto& gridView = grid.leafGridView();
+        const auto& elementMapper = model_.simulator().model().elementMapper();
+
+        // Build cell-to-domain mapping
+        for (const auto& domain : domains_) {
+            data.domain_sizes[domain.index] = domain.cells.size();
+            for (const int cell : domain.cells) {
+                data.cell_to_domain[cell] = domain.index;
+            }
+        }
+
+        // Iterate through all domains to find neighbors
+        for (const auto& domain : domains_) {
+            if (domain.skip) {
+                continue;
+            }
+
+            std::set<int> neighbor_domains;
+            std::map<int, int> connection_counts;
+
+            // Iterate through all cells in this domain
+            for (const auto& element : elements(domain.view)) {
+                if (element.partitionType() != Dune::InteriorEntity) {
+                    continue;
+                }
+
+                // Iterate through all intersections (faces) of this cell
+                for (const auto& intersection : intersections(gridView, element)) {
+                    if (!intersection.neighbor()) {
+                        continue;
+                    }
+
+                    // Get the neighboring cell
+                    const auto& neighbor_element = intersection.outside();
+                    if (neighbor_element.partitionType() != Dune::InteriorEntity) {
+                        continue;
+                    }
+
+                    const int neighbor_cell_idx = elementMapper.index(neighbor_element);
+
+                    // Find which domain the neighbor belongs to
+                    auto it = data.cell_to_domain.find(neighbor_cell_idx);
+                    if (it != data.cell_to_domain.end()) {
+                        const int neighbor_domain_idx = it->second;
+
+                        // Only count if it's a different domain
+                        if (neighbor_domain_idx != domain.index) {
+                            neighbor_domains.insert(neighbor_domain_idx);
+                            connection_counts[neighbor_domain_idx]++;
+                        }
+                    }
+                }
+            }
+
+            data.domain_neighbors[domain.index] = neighbor_domains;
+            data.domain_connection_counts[domain.index] = connection_counts;
+        }
+
+        return data;
+    }
+
+    //! \brief Write domain neighborhood data to JSON file
+    void writeDomainNeighborhoodsToFile(const std::filesystem::path& odir, const DomainNeighborhoodData& data) const
+    {
+        const auto& comm = model_.simulator().vanguard().grid().comm();
+
+        // Gather data from all ranks
+        std::vector<DomainNeighborhoodData> all_rank_data;
+
+        if (comm.size() > 1) {
+#if HAVE_MPI
+            // For MPI, we need to serialize and gather the data
+            // For now, each rank will write its own file
+            const int rank = comm.rank();
+            const std::string filename = fmt::format("domain_neighborhoods_rank_{}.json", rank);
+            writeJsonFile(odir / filename, data, rank);
+#endif
+        } else {
+            // Serial case - just write one file
+            writeJsonFile(odir / "domain_neighborhoods.json", data, 0);
+        }
+
+        // Additionally, create a combined summary on rank 0
+        if (comm.rank() == 0) {
+            writeDomainNeighborhoodSummary(odir, data);
+        }
+    }
+
+    //! \brief Write neighborhood data to JSON file
+    void writeJsonFile(const std::filesystem::path& filepath, const DomainNeighborhoodData& data, const int rank) const
+    {
+        OpmLog::info("  Writing JSON to: " + filepath.string());
+        std::ofstream file(filepath);
+        if (!file.is_open()) {
+            const std::string msg = "Could not open file: " + filepath.string();
+            OpmLog::error(msg);
+            throw std::runtime_error(msg);
+        }
+
+        file << "{\n";
+        file << "  \"rank\": " << rank << ",\n";
+        file << "  \"num_domains\": " << domains_.size() << ",\n";
+        file << "  \"domains\": [\n";
+
+        bool first_domain = true;
+        for (const auto& domain : domains_) {
+            if (!first_domain) {
+                file << ",\n";
+            }
+            first_domain = false;
+
+            file << "    {\n";
+            file << "      \"domain_index\": " << domain.index << ",\n";
+            file << "      \"num_cells\": " << domain.cells.size() << ",\n";
+            file << "      \"skip\": " << (domain.skip ? "true" : "false") << ",\n";
+
+            // Write cell indices
+            file << "      \"cells\": [";
+            for (size_t i = 0; i < domain.cells.size(); ++i) {
+                if (i > 0)
+                    file << ", ";
+                file << domain.cells[i];
+            }
+            file << "],\n";
+
+            // Write neighboring domains
+            file << "      \"neighbor_domains\": [";
+            auto it = data.domain_neighbors.find(domain.index);
+            if (it != data.domain_neighbors.end()) {
+                bool first_neighbor = true;
+                for (int neighbor : it->second) {
+                    if (!first_neighbor)
+                        file << ", ";
+                    first_neighbor = false;
+                    file << neighbor;
+                }
+            }
+            file << "],\n";
+
+            // Write connection counts to each neighbor
+            file << "      \"connection_counts\": {\n";
+            auto conn_it = data.domain_connection_counts.find(domain.index);
+            if (conn_it != data.domain_connection_counts.end()) {
+                bool first_conn = true;
+                for (const auto& [neighbor_domain, count] : conn_it->second) {
+                    if (!first_conn)
+                        file << ",\n";
+                    first_conn = false;
+                    file << "        \"" << neighbor_domain << "\": " << count;
+                }
+            }
+            file << "\n      }\n";
+            file << "    }";
+        }
+
+        file << "\n  ]\n";
+        file << "}\n";
+        file.close();
+        OpmLog::info("  JSON file written successfully.");
+    }
+
+    //! \brief Write a summary of domain neighborhoods
+    void writeDomainNeighborhoodSummary(const std::filesystem::path& odir, const DomainNeighborhoodData& data) const
+    {
+        const auto filepath = odir / "domain_neighborhoods_summary.txt";
+        OpmLog::info("  Writing summary to: " + filepath.string());
+        std::ofstream file(filepath);
+        if (!file.is_open()) {
+            const std::string msg = "Could not open summary file: " + filepath.string();
+            OpmLog::error(msg);
+            throw std::runtime_error(msg);
+        }
+
+        file << "Domain Neighborhood Analysis Summary\n";
+        file << "=====================================\n\n";
+        file << "Total domains: " << domains_.size() << "\n\n";
+
+        file << "Domain connectivity:\n";
+        file << "-------------------\n";
+        file << fmt::format("{:>8} {:>12} {:>15} {:>20}\n", "Domain", "Num Cells", "Num Neighbors", "Neighbor List");
+
+        for (const auto& domain : domains_) {
+            auto it = data.domain_neighbors.find(domain.index);
+            const int num_neighbors = (it != data.domain_neighbors.end()) ? it->second.size() : 0;
+
+            std::ostringstream neighbor_list;
+            if (it != data.domain_neighbors.end()) {
+                bool first = true;
+                for (int neighbor : it->second) {
+                    if (!first)
+                        neighbor_list << ",";
+                    first = false;
+                    neighbor_list << neighbor;
+                }
+            }
+
+            file << fmt::format(
+                "{:>8} {:>12} {:>15} {:>20}\n", domain.index, domain.cells.size(), num_neighbors, neighbor_list.str());
+        }
+
+        file << "\n\nDetailed connection counts:\n";
+        file << "----------------------------\n";
+        for (const auto& domain : domains_) {
+            auto conn_it = data.domain_connection_counts.find(domain.index);
+            if (conn_it != data.domain_connection_counts.end() && !conn_it->second.empty()) {
+                file << "Domain " << domain.index << " connections:\n";
+                for (const auto& [neighbor_domain, count] : conn_it->second) {
+                    file << fmt::format("  -> Domain {:>3}: {:>5} face connections\n", neighbor_domain, count);
+                }
+                file << "\n";
+            }
+        }
+
+        file.close();
+        OpmLog::info("  Summary file written successfully.");
+    }
+
+    //! \brief Store domain ordering for later analysis
+    void storeDomainOrdering(const std::vector<int>& domain_order,
+                             const std::vector<Scalar>& measures = {},
+                             const std::vector<int>& local_iters = {}) const
+    {
+        DomainOrderingRecord record;
+        record.timestep = model_.simulator().episodeIndex();
+        record.iteration = model_.simulator().model().newtonMethod().numIterations();
+        record.domain_order = domain_order;
+        record.measures = measures;
+        record.local_nonlinear_iterations = local_iters;
+        domain_ordering_history_.push_back(record);
+    }
+
+    //! \brief Update the most recent ordering record with local iteration counts
+    void updateLastOrderingWithLocalIterations(const std::vector<int>& local_iters) const
+    {
+        if (!domain_ordering_history_.empty()) {
+            domain_ordering_history_.back().local_nonlinear_iterations = local_iters;
+        }
+    }
+
+    //! \brief Write domain ordering history to file
+    void writeDomainOrderingToFile(const std::filesystem::path& odir) const
+    {
+        if (domain_ordering_history_.empty()) {
+            OpmLog::info("  No domain ordering history to write.");
+            return;
+        }
+
+        const auto& comm = model_.simulator().vanguard().grid().comm();
+        const int rank = comm.rank();
+
+        // Write JSON file
+        const std::string json_filename = rank == 0 && comm.size() == 1
+            ? "domain_ordering_history.json"
+            : fmt::format("domain_ordering_history_rank_{}.json", rank);
+
+        const auto json_filepath = odir / json_filename;
+        OpmLog::info("  Writing ordering history to: " + json_filepath.string());
+
+        std::ofstream file(json_filepath);
+        if (!file.is_open()) {
+            const std::string msg = "Could not open file: " + json_filepath.string();
+            OpmLog::error(msg);
+            throw std::runtime_error(msg);
+        }
+
+        file << "{\n";
+        file << "  \"rank\": " << rank << ",\n";
+        file << "  \"num_domains\": " << domains_.size() << ",\n";
+        file << "  \"ordering_method\": \"" << orderingMethodToString() << "\",\n";
+        file << "  \"solve_approach\": \""
+             << (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi ? "Jacobi" : "GaussSeidel")
+             << "\",\n";
+        file << "  \"history\": [\n";
+
+        for (size_t i = 0; i < domain_ordering_history_.size(); ++i) {
+            const auto& record = domain_ordering_history_[i];
+            if (i > 0)
+                file << ",\n";
+
+            file << "    {\n";
+            file << "      \"timestep\": " << record.timestep << ",\n";
+            file << "      \"iteration\": " << record.iteration << ",\n";
+            file << "      \"domain_order\": [";
+            for (size_t j = 0; j < record.domain_order.size(); ++j) {
+                if (j > 0)
+                    file << ", ";
+                file << record.domain_order[j];
+            }
+            file << "]";
+
+            if (!record.measures.empty()) {
+                file << ",\n      \"measures\": [";
+                for (size_t j = 0; j < record.measures.size(); ++j) {
+                    if (j > 0)
+                        file << ", ";
+                    file << std::scientific << std::setprecision(6) << record.measures[j];
+                }
+                file << "]";
+            }
+
+            if (!record.local_nonlinear_iterations.empty()) {
+                file << ",\n      \"local_nonlinear_iterations\": [";
+                for (size_t j = 0; j < record.local_nonlinear_iterations.size(); ++j) {
+                    if (j > 0)
+                        file << ", ";
+                    file << record.local_nonlinear_iterations[j];
+                }
+                file << "]";
+            }
+            file << "\n    }";
+        }
+
+        file << "\n  ]\n";
+        file << "}\n";
+        file.close();
+
+        OpmLog::info(fmt::format("  Wrote {} ordering records.", domain_ordering_history_.size()));
+    }
+
+    //! \brief Get string name of current ordering method
+    std::string orderingMethodToString() const
+    {
+        switch (model_.param().local_domains_ordering_) {
+        case DomainOrderingMeasure::AveragePressure:
+            return "AveragePressure";
+        case DomainOrderingMeasure::MaxPressure:
+            return "MaxPressure";
+        case DomainOrderingMeasure::Residual:
+            return "Residual";
+        default:
+            return "Unknown";
+        }
+    }
+
+    //! \brief Structure to hold domain ordering information for a single iteration
+    struct DomainOrderingRecord {
+        int timestep;
+        int iteration;
+        std::vector<int> domain_order;
+        std::vector<Scalar> measures;
+        std::vector<int> local_nonlinear_iterations;  // Number of local Newton iterations per domain for this NLDD iteration
+    };
+
     BlackoilModel<TypeTag>& model_; //!< Reference to model
     BlackoilWellModelNldd<TypeTag> wellModel_; //!< NLDD well model adapter
     std::vector<Domain> domains_; //!< Vector of subdomains
@@ -1183,6 +1582,8 @@ private:
     std::vector<Scalar> previousMobilities_;
     // Flag indicating if this domain should be solved in the next iteration
     std::vector<bool> domain_needs_solving_;
+    // History of domain orderings throughout the simulation (mutable for storing in const methods)
+    mutable std::vector<DomainOrderingRecord> domain_ordering_history_;
 };
 
 } // namespace Opm

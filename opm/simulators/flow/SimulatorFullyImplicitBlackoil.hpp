@@ -644,6 +644,7 @@ protected:
             this->grid().comm().barrier();
 
             model->writePartitions(odir);
+            model->writeDomainNeighborhoods(odir);
 
             this->modelParam_.write_partitions_ = false;
         }

@@ -277,6 +277,10 @@ public:
 
     void writePartitions(const std::filesystem::path& odir) const;
 
+    void writeDomainNeighborhoods(const std::filesystem::path& odir) const;
+
+    void writeDomainOrderingHistory(const std::filesystem::path& odir) const;
+
     /// return the StandardWells object
     BlackoilWellModel<TypeTag>&
     wellModel()

@@ -1053,6 +1053,26 @@ writeNonlinearIterationsPerCell(const std::filesystem::path& odir) const
 template <class TypeTag>
 void
 BlackoilModel<TypeTag>::
+writeDomainNeighborhoods(const std::filesystem::path& odir) const
+{
+    if (hasNlddSolver()) {
+        nlddSolver_->writeDomainNeighborhoods(odir);
+    }
+}
+
+template <class TypeTag>
+void
+BlackoilModel<TypeTag>::
+writeDomainOrderingHistory(const std::filesystem::path& odir) const
+{
+    if (hasNlddSolver()) {
+        nlddSolver_->writeDomainOrderingHistory(odir);
+    }
+}
+
+template <class TypeTag>
+void
+BlackoilModel<TypeTag>::
 writePartitions(const std::filesystem::path& odir) const
 {
     if (hasNlddSolver()) {
