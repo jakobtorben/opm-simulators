@@ -272,6 +272,9 @@ public:
     /// Write the number of nonlinear iterations per cell to a file in ResInsight compatible format
     void writeNonlinearIterationsPerCell(const std::filesystem::path& odir) const;
 
+    /// Write the parallel level per cell to a file in ResInsight compatible format
+    void writeParallelLevelsPerCell(const std::filesystem::path& odir) const;
+
     const std::vector<StepReport>& stepReports() const
     { return convergence_reports_; }
 

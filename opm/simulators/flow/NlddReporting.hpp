@@ -152,6 +152,61 @@ void writeNonlinearIterationsPerCell(
 }
 
 /**
+ * Writes the parallel level (color) per cell to a file in ResInsight compatible format
+ *
+ * @param odir The output directory
+ * @param domains The subdomains
+ * @param domain_levels Map from domain index to its parallel level
+ * @param grid The grid
+ * @param elementMapper The element mapper
+ * @param cartMapper The cartesian index mapper
+ */
+template <class Grid, class Domain, class ElementMapper, class CartMapper>
+void
+writeParallelLevelsPerCell(const std::filesystem::path& odir,
+                           const std::vector<Domain>& domains,
+                           const std::vector<int>& domain_levels,
+                           const Grid& grid,
+                           const ElementMapper& elementMapper,
+                           const CartMapper& cartMapper)
+{
+    const auto& dims = cartMapper.cartesianDimensions();
+    const auto total_size = dims[0] * dims[1] * dims[2];
+    const auto& comm = grid.comm();
+    const int rank = comm.rank();
+
+    // Create a cell-to-level mapping for this process
+    std::vector<int> cell_levels(grid.size(0), -1);
+
+    // Populate the mapping with level for each domain
+    for (const auto& domain : domains) {
+        const int level = domain.index < static_cast<int>(domain_levels.size()) ? domain_levels[domain.index] : -1;
+        for (const int cell_idx : domain.cells) {
+            cell_levels[cell_idx] = level;
+        }
+    }
+
+    // Create a full-sized vector initialized with -1 (indicating inactive cells)
+    auto full_levels = std::vector<int>(total_size, -1);
+
+    // Convert local cell indices to cartesian indices
+    const auto& gridView = grid.leafGridView();
+    for (const auto& cell : elements(gridView, Dune::Partitions::interior)) {
+        const int cell_idx = elementMapper.index(cell);
+        const int cart_idx = cartMapper.cartesianIndex(cell_idx);
+        full_levels[cart_idx] = cell_levels[cell_idx];
+    }
+
+    // Gather all level data using max operation
+    comm.max(full_levels.data(), full_levels.size());
+
+    // Only rank 0 writes the file
+    if (rank == 0) {
+        details::writeNlddFile(odir / "ResInsight_parallel_levels.txt", "NLDD_LEVEL", full_levels);
+    }
+}
+
+/**
  * Writes the partition vector to a file in ResInsight compatible format and a partition file for each rank
  *
  * @param odir The output directory

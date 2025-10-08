@@ -38,6 +38,7 @@
 #include <opm/simulators/flow/SubDomain.hpp>
 
 #include <opm/simulators/linalg/extractMatrix.hpp>
+#include <opm/simulators/linalg/GraphColoring.hpp>
 
 #if COMPILE_GPU_BRIDGE
 #include <opm/simulators/linalg/ISTLSolverGpuBridge.hpp>
@@ -270,6 +271,12 @@ public:
         const auto domain_order = this->getSubdomainOrder();
         local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
 
+        // Print parallel levels on first iteration after initial Newton iterations
+        //if (!parallel_levels_printed_ && iteration == model_.param().nldd_num_initial_newton_iter_) {
+            computeAndPrintParallelLevels();
+        //    parallel_levels_printed_ = true;
+        //}
+
         // -----------   Solve each domain separately   -----------
         DeferredLogger logger;
         std::vector<SimulatorReportSingle> domain_reports(domains_.size());
@@ -480,6 +487,34 @@ public:
             grid,
             elementMapper,
             cartMapper);
+    }
+
+    /// Write the parallel level per cell to a file in ResInsight compatible format
+    void writeParallelLevelsPerCell(const std::filesystem::path& odir) const
+    {
+        if (rank_ != 0 && model_.simulator().vanguard().grid().comm().size() > 1) {
+            // Only rank 0 needs to compute this in parallel runs
+            // (all ranks will participate in communication)
+        }
+
+        if (domain_ordering_history_.empty()) {
+            OpmLog::warning("No domain ordering history available for parallel levels output.");
+            return;
+        }
+
+        // Get the most recent domain ordering
+        const auto& domain_order = domain_ordering_history_.back().domain_order;
+
+        // Compute neighborhood data and parallel levels
+        const auto neighborhood_data = analyzeDomainNeighborhoods();
+        const auto [levels, level_counts, num_levels]
+            = computeDomainParallelLevels(domain_order, neighborhood_data.domain_neighbors);
+
+        const auto& grid = this->model_.simulator().vanguard().grid();
+        const auto& elementMapper = this->model_.simulator().model().elementMapper();
+        const auto& cartMapper = this->model_.simulator().vanguard().cartesianIndexMapper();
+
+        ::Opm::writeParallelLevelsPerCell(odir, domains_, levels, grid, elementMapper, cartMapper);
     }
 
     /// Analyze and write domain neighborhood structure to file
@@ -974,6 +1009,39 @@ private:
             return domain_order;
         } else {
             throw std::logic_error("Domain solve approach must be Jacobi or Gauss-Seidel");
+        }
+    }
+
+    //! \brief Compute and print parallel levels for current domain ordering
+    void computeAndPrintParallelLevels() const
+    {
+        if (rank_ != 0 || domain_ordering_history_.empty()) {
+            return; // Only print from rank 0 when data is available
+        }
+
+        try {
+            const auto& domain_order = domain_ordering_history_.back().domain_order;
+            const auto neighborhood_data = analyzeDomainNeighborhoods();
+            const auto [levels, level_counts, num_levels]
+                = computeDomainParallelLevels(domain_order, neighborhood_data.domain_neighbors);
+
+            const double parallelism = num_levels > 0 ? static_cast<double>(domain_order.size()) / num_levels : 1.0;
+
+            // Print summary
+            OpmLog::info("===== Parallel Level Analysis =====");
+            OpmLog::info(fmt::format("Domains: {}  |  Levels: {}  |  Parallelism: {:.2f}x  |  Method: {}",
+                                     domain_order.size(),
+                                     num_levels,
+                                     parallelism,
+                                     orderingMethodToString()));
+            OpmLog::info("\nDomains per level:");
+            for (int level = 0; level < num_levels; ++level) {
+                OpmLog::info(fmt::format("  Level {:2d}: {:3d} domains", level, level_counts[level]));
+            }
+            OpmLog::info("===================================\n");
+
+        } catch (const std::exception& e) {
+            OpmLog::error("Error computing parallel levels: " + std::string(e.what()));
         }
     }
 

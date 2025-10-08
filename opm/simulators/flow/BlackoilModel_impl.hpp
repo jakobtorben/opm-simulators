@@ -1053,6 +1053,16 @@ writeNonlinearIterationsPerCell(const std::filesystem::path& odir) const
 template <class TypeTag>
 void
 BlackoilModel<TypeTag>::
+writeParallelLevelsPerCell(const std::filesystem::path& odir) const
+{
+    if (hasNlddSolver()) {
+        nlddSolver_->writeParallelLevelsPerCell(odir);
+    }
+}
+
+template <class TypeTag>
+void
+BlackoilModel<TypeTag>::
 writeDomainNeighborhoods(const std::filesystem::path& odir) const
 {
     if (hasNlddSolver()) {

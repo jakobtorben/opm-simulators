@@ -400,6 +400,8 @@ namespace Opm {
                 const auto& odir = eclState().getIOConfig().getOutputDir();
                 // Write the number of nonlinear iterations per cell to a file in ResInsight compatible format
                 simulator_->model().writeNonlinearIterationsPerCell(odir);
+                // Write the parallel level per cell to a file in ResInsight compatible format
+                simulator_->model().writeParallelLevelsPerCell(odir);
                 // Write the domain ordering history
                 simulator_->model().writeDomainOrderingHistory(odir);
                 // Write the NLDD statistics to the DBG file
