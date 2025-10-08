@@ -273,7 +273,7 @@ public:
 
         // Print parallel levels on first iteration after initial Newton iterations
         //if (!parallel_levels_printed_ && iteration == model_.param().nldd_num_initial_newton_iter_) {
-            computeAndPrintParallelLevels();
+            //computeAndPrintParallelLevels();
         //    parallel_levels_printed_ = true;
         //}
 
@@ -996,6 +996,62 @@ private:
                 }
                 break;
             }
+            case DomainOrderingMeasure::InjMaxPressure: {
+                // Hybrid ordering: injector domains first (sorted by number of injectors),
+                // then non-injector domains sorted by max pressure.
+
+                // Count injectors per domain
+                std::vector<int> injectors_per_domain(domains_.size(), 0);
+                for (const auto& well : model_.wellModel().localNonshutWells()) {
+                    const auto& well_name = well->name();
+                    const auto& well_domain_map = wellModel_.well_domain();
+                    auto domain_it = well_domain_map.find(well_name);
+                    if (domain_it != well_domain_map.end()) {
+                        const int domain_idx = domain_it->second;
+                        if (domain_idx >= 0 && domain_idx < static_cast<int>(domains_.size())) {
+                            if (well->isInjector()) {
+                                injectors_per_domain[domain_idx]++;
+                            }
+                        }
+                    }
+                }
+
+                // Calculate max pressure for all domains
+                std::vector<Scalar> max_pressure_per_domain(domains_.size(), 0.0);
+                for (const auto& domain : domains_) {
+                    max_pressure_per_domain[domain.index]
+                        = std::accumulate(domain.cells.begin(),
+                                          domain.cells.end(),
+                                          Scalar {0},
+                                          [&solution](const auto acc, const auto c) {
+                                              return std::max(acc, solution[c][Indices::pressureSwitchIdx]);
+                                          });
+                }
+
+                // Sort with two-level comparator:
+                // 1. Number of injectors (desc) - domains with 0 injectors naturally come last
+                // 2. Max pressure (desc) - tie-breaker
+                std::stable_sort(domain_order.begin(), domain_order.end(),
+                    [&injectors_per_domain, &max_pressure_per_domain](int d1, int d2) {
+                        // First compare by number of injectors
+                        if (injectors_per_domain[d1] != injectors_per_domain[d2]) {
+                            return injectors_per_domain[d1] > injectors_per_domain[d2];
+                        }
+                        // Tie-breaker: compare by max pressure
+                        return max_pressure_per_domain[d1] > max_pressure_per_domain[d2];
+                    });
+
+                // Store measures for analysis (using the actual sorting criteria)
+                for (const auto& domain : domains_) {
+                    measure_per_domain[domain.index] = injectors_per_domain[domain.index] > 0
+                        ? injectors_per_domain[domain.index]
+                        : max_pressure_per_domain[domain.index];
+                }
+
+                // Skip the general sort below since we've already ordered
+                storeDomainOrdering(domain_order, measure_per_domain);
+                return domain_order;
+            }
             } // end of switch (model_.param().local_domains_ordering_)
 
             // Sort by largest measure, keeping index order if equal.
@@ -1287,6 +1343,10 @@ private:
         std::map<int, std::map<int, int>> domain_connection_counts;
         // Map from cell index to domain index
         std::map<int, int> cell_to_domain;
+        // Map from domain index to number of injector wells
+        std::map<int, int> domain_injector_count;
+        // Map from domain index to number of producer wells
+        std::map<int, int> domain_producer_count;
     };
 
     //! \brief Analyze the neighborhood structure between domains
@@ -1297,11 +1357,28 @@ private:
         const auto& gridView = grid.leafGridView();
         const auto& elementMapper = model_.simulator().model().elementMapper();
 
-        // Build cell-to-domain mapping
+        // Build cell-to-domain mapping and initialize well counts
         for (const auto& domain : domains_) {
             data.domain_sizes[domain.index] = domain.cells.size();
+            data.domain_injector_count[domain.index] = 0;
+            data.domain_producer_count[domain.index] = 0;
             for (const int cell : domain.cells) {
                 data.cell_to_domain[cell] = domain.index;
+            }
+        }
+
+        // Count injector and producer wells per domain
+        for (const auto& well : model_.wellModel().localNonshutWells()) {
+            const auto& well_name = well->name();
+            const auto& well_domain_map = wellModel_.well_domain();
+            auto domain_it = well_domain_map.find(well_name);
+            if (domain_it != well_domain_map.end()) {
+                const int domain_idx = domain_it->second;
+                if (well->isInjector()) {
+                    data.domain_injector_count[domain_idx]++;
+                } else {
+                    data.domain_producer_count[domain_idx]++;
+                }
             }
         }
 
@@ -1409,6 +1486,14 @@ private:
             file << "      \"domain_index\": " << domain.index << ",\n";
             file << "      \"num_cells\": " << domain.cells.size() << ",\n";
             file << "      \"skip\": " << (domain.skip ? "true" : "false") << ",\n";
+            
+            // Write well counts
+            auto inj_it = data.domain_injector_count.find(domain.index);
+            auto prod_it = data.domain_producer_count.find(domain.index);
+            const int num_injectors = (inj_it != data.domain_injector_count.end()) ? inj_it->second : 0;
+            const int num_producers = (prod_it != data.domain_producer_count.end()) ? prod_it->second : 0;
+            file << "      \"num_injectors\": " << num_injectors << ",\n";
+            file << "      \"num_producers\": " << num_producers << ",\n";
 
             // Write cell indices
             file << "      \"cells\": [";
@@ -1473,11 +1558,17 @@ private:
 
         file << "Domain connectivity:\n";
         file << "-------------------\n";
-        file << fmt::format("{:>8} {:>12} {:>15} {:>20}\n", "Domain", "Num Cells", "Num Neighbors", "Neighbor List");
+        file << fmt::format("{:>8} {:>12} {:>12} {:>12} {:>15} {:>20}\n", 
+                           "Domain", "Num Cells", "Injectors", "Producers", "Num Neighbors", "Neighbor List");
 
         for (const auto& domain : domains_) {
             auto it = data.domain_neighbors.find(domain.index);
             const int num_neighbors = (it != data.domain_neighbors.end()) ? it->second.size() : 0;
+            
+            auto inj_it = data.domain_injector_count.find(domain.index);
+            auto prod_it = data.domain_producer_count.find(domain.index);
+            const int num_injectors = (inj_it != data.domain_injector_count.end()) ? inj_it->second : 0;
+            const int num_producers = (prod_it != data.domain_producer_count.end()) ? prod_it->second : 0;
 
             std::ostringstream neighbor_list;
             if (it != data.domain_neighbors.end()) {
@@ -1491,7 +1582,8 @@ private:
             }
 
             file << fmt::format(
-                "{:>8} {:>12} {:>15} {:>20}\n", domain.index, domain.cells.size(), num_neighbors, neighbor_list.str());
+                "{:>8} {:>12} {:>12} {:>12} {:>15} {:>20}\n", 
+                domain.index, domain.cells.size(), num_injectors, num_producers, num_neighbors, neighbor_list.str());
         }
 
         file << "\n\nDetailed connection counts:\n";
@@ -1522,6 +1614,27 @@ private:
         record.domain_order = domain_order;
         record.measures = measures;
         record.local_nonlinear_iterations = local_iters;
+        
+        // Count injector and producer wells per domain
+        record.num_injectors_per_domain.resize(domains_.size(), 0);
+        record.num_producers_per_domain.resize(domains_.size(), 0);
+        
+        for (const auto& well : model_.wellModel().localNonshutWells()) {
+            const auto& well_name = well->name();
+            const auto& well_domain_map = wellModel_.well_domain();
+            auto domain_it = well_domain_map.find(well_name);
+            if (domain_it != well_domain_map.end()) {
+                const int domain_idx = domain_it->second;
+                if (domain_idx >= 0 && domain_idx < static_cast<int>(domains_.size())) {
+                    if (well->isInjector()) {
+                        record.num_injectors_per_domain[domain_idx]++;
+                    } else {
+                        record.num_producers_per_domain[domain_idx]++;
+                    }
+                }
+            }
+        }
+        
         domain_ordering_history_.push_back(record);
     }
 
@@ -1603,6 +1716,27 @@ private:
                 }
                 file << "]";
             }
+
+            if (!record.num_injectors_per_domain.empty()) {
+                file << ",\n      \"num_injectors_per_domain\": [";
+                for (size_t j = 0; j < record.num_injectors_per_domain.size(); ++j) {
+                    if (j > 0)
+                        file << ", ";
+                    file << record.num_injectors_per_domain[j];
+                }
+                file << "]";
+            }
+
+            if (!record.num_producers_per_domain.empty()) {
+                file << ",\n      \"num_producers_per_domain\": [";
+                for (size_t j = 0; j < record.num_producers_per_domain.size(); ++j) {
+                    if (j > 0)
+                        file << ", ";
+                    file << record.num_producers_per_domain[j];
+                }
+                file << "]";
+            }
+
             file << "\n    }";
         }
 
@@ -1623,6 +1757,8 @@ private:
             return "MaxPressure";
         case DomainOrderingMeasure::Residual:
             return "Residual";
+        case DomainOrderingMeasure::InjMaxPressure:
+            return "InjMaxPressure";
         default:
             return "Unknown";
         }
@@ -1635,6 +1771,8 @@ private:
         std::vector<int> domain_order;
         std::vector<Scalar> measures;
         std::vector<int> local_nonlinear_iterations;  // Number of local Newton iterations per domain for this NLDD iteration
+        std::vector<int> num_injectors_per_domain;    // Number of injector wells per domain
+        std::vector<int> num_producers_per_domain;    // Number of producer wells per domain
     };
 
     BlackoilModel<TypeTag>& model_; //!< Reference to model
