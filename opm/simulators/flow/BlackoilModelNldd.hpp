@@ -75,6 +75,8 @@
 #include <utility>
 #include <vector>
 
+#include <omp.h>
+
 namespace Opm {
 
 template<class TypeTag> class BlackoilModel;
@@ -226,6 +228,9 @@ public:
             domain_reports_accumulated_,
             grid,
             wellModel_.numLocalWellsEnd());
+
+        // Compute neighborhood data to get neighborhood information
+        computeNeighborhoodData();
     }
 
     //! \brief Called before starting a time step.
@@ -281,49 +286,215 @@ public:
         DeferredLogger logger;
         std::vector<SimulatorReportSingle> domain_reports(domains_.size());
         std::vector<int> local_nonlinear_iters(domains_.size(), 0);  // Track local iterations for this NLDD iteration
-        for (const int domain_index : domain_order) {
-            const auto& domain = domains_[domain_index];
-            SimulatorReportSingle local_report;
-            detailTimer.reset();
-            detailTimer.start();
 
-            domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
+        // Decide if we should use parallel solving
+        const bool use_parallel = model_.param().nldd_use_parallel_solve_;
 
-            updateMobilities(domain);
+        if (use_parallel && model_.param().local_solve_approach_ == DomainSolveApproach::GaussSeidel) {
+            // For Gauss-Seidel, compute parallel levels and solve by levels
+            Dune::Timer parallel_level_timer;
+            parallel_level_timer.start();
+            const auto [domains_per_level, num_levels]
+                = computeDomainParallelLevels(domain_order, cached_neighborhood_data_.domain_neighbors);
+            const double parallel_level_time = parallel_level_timer.stop();
 
-            if (domain.skip || !domain_needs_solving_[domain_index]) {
-                local_report.skipped_domains = true;
-                local_report.converged = true;
-                domain_reports[domain.index] = local_report;
-                continue;
+            if (this->rank_ == 0) {
+                OpmLog::info(fmt::format("Timing: computeDomainParallelLevels took {:.6f} seconds", parallel_level_time));
             }
-            try {
-                switch (model_.param().local_solve_approach_) {
-                case DomainSolveApproach::Jacobi:
-                    solveDomainJacobi(solution, locally_solved, local_report, logger,
-                                      iteration, timer, domain);
-                    break;
-                default:
-                case DomainSolveApproach::GaussSeidel:
-                    solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
-                                           iteration, timer, domain);
-                    break;
+
+            const bool is_iorank = this->rank_ == 0;
+            if (is_iorank) {
+                const double parallelism = num_levels > 0 ? static_cast<double>(domain_order.size()) / num_levels : 1.0;
+#if _OPENMP
+                const int num_threads = omp_get_max_threads();
+                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains using {} parallel levels (parallelism: {:.2f}x) with {} OpenMP threads",
+                                         domain_order.size(), num_levels, parallelism, num_threads));
+#else
+                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains using {} parallel levels (parallelism: {:.2f}x) - OpenMP disabled",
+                                         domain_order.size(), num_levels, parallelism));
+#endif
+            }
+
+            // Disable nested parallelism locally to avoid thread oversubscription
+            // (assembly code has its own OpenMP loops that could be problematic)
+#if _OPENMP
+            const int saved_nested_level = omp_get_max_active_levels();
+            omp_set_max_active_levels(1);
+#endif
+
+            // Solve level by level
+            for (int level = 0; level < num_levels; ++level) {
+                const auto& level_domains = domains_per_level[level];
+                if (is_iorank && level_domains.size() > 1) {
+                    OpmLog::debug(fmt::format("  Level {}: solving {} domains in parallel", level, level_domains.size()));
                 }
+
+                // Thread-local loggers to avoid data races (DeferredLogger is not thread-safe)
+                // Commented out for now during development
+                //std::vector<DeferredLogger> thread_loggers(level_domains.size());
+
+#if _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+                for (size_t i = 0; i < level_domains.size(); ++i) {
+                    const int domain_index = level_domains[i];
+                    const auto& domain = domains_[domain_index];
+                    SimulatorReportSingle local_report;
+                    DeferredLogger dummy_logger; // Local logger, not used for now
+
+                    domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
+                    updateMobilities(domain);
+
+                    if (domain.skip || !domain_needs_solving_[domain_index]) {
+                        local_report.skipped_domains = true;
+                        local_report.converged = true;
+                        domain_reports[domain.index] = local_report;
+                        continue;
+                    }
+
+                    try {
+                        solveDomainGaussSeidel(solution, locally_solved, local_report, dummy_logger,
+                                               iteration, timer, domain);
+                    }
+                    catch (...) {
+                        local_report.converged = false;
+                    }
+
+                    // Logging commented out for now during development
+                    //if (!local_report.converged) {
+                    //    thread_loggers[i].debug(fmt::format("Convergence failure in domain {} on rank {}.", domain.index, rank_));
+                    //}
+
+                    domain_reports[domain.index] = local_report;
+                    local_nonlinear_iters[domain.index] = local_report.total_newton_iterations;
+                }
+
+                // Gather and log messages from all threads - commented out for now during development
+                //for (const auto& thread_logger : thread_loggers) {
+                //    auto gathered = gatherDeferredLogger(thread_logger, model_.simulator().vanguard().grid().comm());
+                //    gathered.logMessages();
+                //}
             }
-            catch (...) {
-                // Something went wrong during local solves.
-                local_report.converged = false;
+
+            // Restore original nested parallelism level
+#if _OPENMP
+            omp_set_max_active_levels(saved_nested_level);
+#endif
+        } else if (use_parallel && model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
+            // For Jacobi, all domains can be solved in parallel
+            const bool is_iorank = this->rank_ == 0;
+            if (is_iorank) {
+#if _OPENMP
+                const int num_threads = omp_get_max_threads();
+                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains in parallel (Jacobi) with {} OpenMP threads", 
+                                         domain_order.size(), num_threads));
+#else
+                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains (Jacobi) - OpenMP disabled", domain_order.size()));
+#endif
             }
-            // This should have updated the global matrix to be
-            // dR_i/du_j evaluated at new local solutions for
-            // i == j, at old solution for i != j.
-            if (!local_report.converged) {
-                // TODO: more proper treatment, including in parallel.
-                logger.debug(fmt::format("Convergence failure in domain {} on rank {}." , domain.index, rank_));
+
+            // Disable nested parallelism locally to avoid thread oversubscription
+#if _OPENMP
+            const int saved_nested_level = omp_get_max_active_levels();
+            omp_set_max_active_levels(1);
+#endif
+
+            // Thread-local loggers to avoid data races (DeferredLogger is not thread-safe)
+            // Commented out for now during development
+            //std::vector<DeferredLogger> thread_loggers(domain_order.size());
+
+#if _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+            for (size_t i = 0; i < domain_order.size(); ++i) {
+                const int domain_index = domain_order[i];
+                const auto& domain = domains_[domain_index];
+                SimulatorReportSingle local_report;
+                DeferredLogger dummy_logger; // Local logger, not used for now
+
+                domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
+                updateMobilities(domain);
+
+                if (domain.skip || !domain_needs_solving_[domain_index]) {
+                    local_report.skipped_domains = true;
+                    local_report.converged = true;
+                    domain_reports[domain.index] = local_report;
+                    continue;
+                }
+
+                try {
+                    solveDomainJacobi(solution, locally_solved, local_report, dummy_logger,
+                                      iteration, timer, domain);
+                }
+                catch (...) {
+                    local_report.converged = false;
+                }
+
+                // Logging commented out for now during development
+                //if (!local_report.converged) {
+                //    thread_loggers[i].debug(fmt::format("Convergence failure in domain {} on rank {}.", domain.index, rank_));
+                //}
+
+                domain_reports[domain.index] = local_report;
+                local_nonlinear_iters[domain.index] = local_report.total_newton_iterations;
             }
-            local_report.solver_time += detailTimer.stop();
-            domain_reports[domain.index] = local_report;
-            local_nonlinear_iters[domain.index] = local_report.total_newton_iterations;
+
+            // Gather and log messages from all threads - commented out for now during development
+            //for (const auto& thread_logger : thread_loggers) {
+            //    auto gathered = gatherDeferredLogger(thread_logger, model_.simulator().vanguard().grid().comm());
+            //    gathered.logMessages();
+            //}
+
+            // Restore original nested parallelism level
+#if _OPENMP
+            omp_set_max_active_levels(saved_nested_level);
+#endif
+        } else {
+            // Sequential solving (original code path)
+            for (const int domain_index : domain_order) {
+                const auto& domain = domains_[domain_index];
+                SimulatorReportSingle local_report;
+                detailTimer.reset();
+                detailTimer.start();
+
+                domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
+
+                updateMobilities(domain);
+
+                if (domain.skip || !domain_needs_solving_[domain_index]) {
+                    local_report.skipped_domains = true;
+                    local_report.converged = true;
+                    domain_reports[domain.index] = local_report;
+                    continue;
+                }
+                try {
+                    switch (model_.param().local_solve_approach_) {
+                    case DomainSolveApproach::Jacobi:
+                        solveDomainJacobi(solution, locally_solved, local_report, logger,
+                                          iteration, timer, domain);
+                        break;
+                    default:
+                    case DomainSolveApproach::GaussSeidel:
+                        solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
+                                               iteration, timer, domain);
+                        break;
+                    }
+                }
+                catch (...) {
+                    // Something went wrong during local solves.
+                    local_report.converged = false;
+                }
+                // This should have updated the global matrix to be
+                // dR_i/du_j evaluated at new local solutions for
+                // i == j, at old solution for i != j.
+                if (!local_report.converged) {
+                    // TODO: more proper treatment, including in parallel.
+                    logger.debug(fmt::format("Convergence failure in domain {} on rank {}." , domain.index, rank_));
+                }
+                local_report.solver_time += detailTimer.stop();
+                domain_reports[domain.index] = local_report;
+                local_nonlinear_iters[domain.index] = local_report.total_newton_iterations;
+            }
         }
         detailTimer.reset();
         detailTimer.start();
@@ -506,9 +677,17 @@ public:
         const auto& domain_order = domain_ordering_history_.back().domain_order;
 
         // Compute neighborhood data and parallel levels
-        const auto neighborhood_data = analyzeDomainNeighborhoods();
-        const auto [levels, level_counts, num_levels]
+        const auto& neighborhood_data = analyzeDomainNeighborhoods();
+        const auto [domains_per_level, num_levels]
             = computeDomainParallelLevels(domain_order, neighborhood_data.domain_neighbors);
+
+        // Convert to domain->level mapping for output function
+        std::vector<int> levels(domains_.size());
+        for (int level = 0; level < num_levels; ++level) {
+            for (int domain_idx : domains_per_level[level]) {
+                levels[domain_idx] = level;
+            }
+        }
 
         const auto& grid = this->model_.simulator().vanguard().grid();
         const auto& elementMapper = this->model_.simulator().model().elementMapper();
@@ -545,6 +724,16 @@ public:
 
 private:
     //! \brief Solve the equation system for a single domain.
+    //! 
+    //! Thread safety analysis results:
+    //! 
+    //! ROOT CAUSE: wellModel_.assemble() accesses shared state:
+    //!   - wellModel_.wellState() (modified by updateWellControl)
+    //!   - wellModel_.groupState() (read-only but concurrent access)
+    //!   - wellModel_.localNonshutWells() (shared container)
+    //!
+    //! SOLUTION: Protect ALL calls to wellModel_.assemble() with critical sections.
+    //!           Other operations (linearizeDomain, postSolveDomain, etc.) are thread-safe.
     ConvergenceReport
     solveDomain(const Domain& domain,
                 const SimulatorTimerInterface& timer,
@@ -568,9 +757,15 @@ private:
             modelSimulator.model().newtonMethod().setIterationIndex(iter);
             // TODO: we should have a beginIterationLocal function()
             // only handling the well model for now
+            // Protect well assembly due to shared wellState access
+#if _OPENMP
+#pragma omp critical(well_assembly)
+#endif
+            {
             wellModel_.assemble(modelSimulator.model().newtonMethod().numIterations(),
                                 modelSimulator.timeStepSize(),
                                 domain);
+            }
             const double tt0 = detailTimer.stop();
             local_report.assemble_time += tt0;
             local_report.assemble_time_well += tt0;
@@ -639,10 +834,15 @@ private:
             modelSimulator.model().newtonMethod().setIterationIndex(iter);
             // TODO: we should have a beginIterationLocal function()
             // only handling the well model for now
-            // Assemble reservoir locally.
+            // Protect well assembly due to shared wellState access
+#if _OPENMP
+#pragma omp critical(well_assembly)
+#endif
+            {
             wellModel_.assemble(modelSimulator.model().newtonMethod().numIterations(),
                                 modelSimulator.timeStepSize(),
                                 domain);
+            }
             const double tt3 = detailTimer.stop();
             local_report.assemble_time += tt3;
             local_report.assemble_time_well += tt3;
@@ -725,7 +925,6 @@ private:
         x = 0.0;
 
         auto& linsolver = domain_linsolvers_[domain.index];
-
         linsolver.prepare(jac, res);
         model_.linearSolveSetupTime() = perfTimer.stop();
         linsolver.setResidual(res);
@@ -1077,8 +1276,8 @@ private:
 
         try {
             const auto& domain_order = domain_ordering_history_.back().domain_order;
-            const auto neighborhood_data = analyzeDomainNeighborhoods();
-            const auto [levels, level_counts, num_levels]
+            const auto& neighborhood_data = analyzeDomainNeighborhoods();
+            const auto [domains_per_level, num_levels]
                 = computeDomainParallelLevels(domain_order, neighborhood_data.domain_neighbors);
 
             const double parallelism = num_levels > 0 ? static_cast<double>(domain_order.size()) / num_levels : 1.0;
@@ -1092,7 +1291,7 @@ private:
                                      orderingMethodToString()));
             OpmLog::info("\nDomains per level:");
             for (int level = 0; level < num_levels; ++level) {
-                OpmLog::info(fmt::format("  Level {:2d}: {:3d} domains", level, level_counts[level]));
+                OpmLog::info(fmt::format("  Level {:2d}: {:3d} domains", level, domains_per_level[level].size()));
             }
             OpmLog::info("===================================\n");
 
@@ -1349,21 +1548,20 @@ private:
         std::map<int, int> domain_producer_count;
     };
 
-    //! \brief Analyze the neighborhood structure between domains
-    DomainNeighborhoodData analyzeDomainNeighborhoods() const
+    //! \brief Compute domain neighborhood data once in constructor
+    void computeNeighborhoodData()
     {
-        DomainNeighborhoodData data;
         const auto& grid = model_.simulator().vanguard().grid();
         const auto& gridView = grid.leafGridView();
         const auto& elementMapper = model_.simulator().model().elementMapper();
 
-        // Build cell-to-domain mapping and initialize well counts
+        // Build cell-to-domain mapping and domain sizes
         for (const auto& domain : domains_) {
-            data.domain_sizes[domain.index] = domain.cells.size();
-            data.domain_injector_count[domain.index] = 0;
-            data.domain_producer_count[domain.index] = 0;
+            cached_neighborhood_data_.domain_sizes[domain.index] = domain.cells.size();
+            cached_neighborhood_data_.domain_injector_count[domain.index] = 0;
+            cached_neighborhood_data_.domain_producer_count[domain.index] = 0;
             for (const int cell : domain.cells) {
-                data.cell_to_domain[cell] = domain.index;
+                cached_neighborhood_data_.cell_to_domain[cell] = domain.index;
             }
         }
 
@@ -1375,9 +1573,9 @@ private:
             if (domain_it != well_domain_map.end()) {
                 const int domain_idx = domain_it->second;
                 if (well->isInjector()) {
-                    data.domain_injector_count[domain_idx]++;
+                    cached_neighborhood_data_.domain_injector_count[domain_idx]++;
                 } else {
-                    data.domain_producer_count[domain_idx]++;
+                    cached_neighborhood_data_.domain_producer_count[domain_idx]++;
                 }
             }
         }
@@ -1412,8 +1610,8 @@ private:
                     const int neighbor_cell_idx = elementMapper.index(neighbor_element);
 
                     // Find which domain the neighbor belongs to
-                    auto it = data.cell_to_domain.find(neighbor_cell_idx);
-                    if (it != data.cell_to_domain.end()) {
+                    auto it = cached_neighborhood_data_.cell_to_domain.find(neighbor_cell_idx);
+                    if (it != cached_neighborhood_data_.cell_to_domain.end()) {
                         const int neighbor_domain_idx = it->second;
 
                         // Only count if it's a different domain
@@ -1425,11 +1623,15 @@ private:
                 }
             }
 
-            data.domain_neighbors[domain.index] = neighbor_domains;
-            data.domain_connection_counts[domain.index] = connection_counts;
+            cached_neighborhood_data_.domain_neighbors[domain.index] = neighbor_domains;
+            cached_neighborhood_data_.domain_connection_counts[domain.index] = connection_counts;
         }
+    }
 
-        return data;
+    //! \brief Get cached domain neighborhood data
+    const DomainNeighborhoodData& analyzeDomainNeighborhoods() const
+    {
+        return cached_neighborhood_data_;
     }
 
     //! \brief Write domain neighborhood data to JSON file
@@ -1790,6 +1992,8 @@ private:
     std::vector<bool> domain_needs_solving_;
     // History of domain orderings throughout the simulation (mutable for storing in const methods)
     mutable std::vector<DomainOrderingRecord> domain_ordering_history_;
+    // Cached neighborhood data (computed once in constructor)
+    DomainNeighborhoodData cached_neighborhood_data_;
 };
 
 } // namespace Opm

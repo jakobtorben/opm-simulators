@@ -152,6 +152,7 @@ struct LocalToleranceScalingCnv { static constexpr Scalar value = 0.1; };
 struct NlddNumInitialNewtonIter { static constexpr int value = 1; };
 template<class Scalar>
 struct NlddRelativeMobilityChangeTol { static constexpr Scalar value = 0.1; };
+struct NlddUseParallelSolve { static constexpr bool value = true; };
 struct NumLocalDomains { static constexpr int value = 0; };
 
 template<class Scalar>
@@ -352,6 +353,8 @@ public:
     int nldd_num_initial_newton_iter_{1};
     /// Threshold for single cell relative mobility change in NLDD
     Scalar nldd_relative_mobility_change_tol_;
+    /// Whether to use OpenMP parallelization for NLDD domain solving
+    bool nldd_use_parallel_solve_{true};
     int num_local_domains_{0};
     Scalar local_domains_partition_imbalance_{1.03};
     std::string local_domains_partition_method_;

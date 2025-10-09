@@ -311,14 +311,14 @@ getMatrixRowColoring(const M& matrix, ColoringType coloringType)
 ///          solved in parallel. Level i domains only depend on domains in levels < i.
 /// \param domain_order The ordered list of domain indices to process
 /// \param adjacency Map from domain index to set of neighboring domain indices
-/// \return Tuple of (levels per domain, domains per level, number of levels)
-inline std::tuple<std::vector<int>, std::vector<std::size_t>, int>
+/// \return Tuple of (domains grouped by level, number of levels)
+inline std::tuple<std::vector<std::vector<int>>, int>
 computeDomainParallelLevels(const std::vector<int>& domain_order, const std::map<int, std::set<int>>& adjacency)
 {
     OPM_TIMEBLOCK(computeDomainParallelLevels);
 
     std::map<int, int> domain_levels; // domain_id -> level
-    std::vector<std::size_t> level_counts;
+    std::vector<std::vector<int>> domains_per_level;
 
     // Process domains in order
     for (const int domain : domain_order) {
@@ -334,22 +334,16 @@ computeDomainParallelLevels(const std::vector<int>& domain_order, const std::map
             }
         }
 
-        // Assign level and update counts
+        // Assign level and add to appropriate level group
         const int level = max_neighbor_level + 1;
         domain_levels[domain] = level;
-        if (static_cast<std::size_t>(level) >= level_counts.size()) {
-            level_counts.resize(level + 1, 0);
+        if (static_cast<std::size_t>(level) >= domains_per_level.size()) {
+            domains_per_level.resize(level + 1);
         }
-        ++level_counts[level];
+        domains_per_level[level].push_back(domain);
     }
 
-    // Convert map to vector for consistent indexing
-    std::vector<int> levels(domain_order.size());
-    for (std::size_t i = 0; i < domain_order.size(); ++i) {
-        levels[domain_order[i]] = domain_levels[domain_order[i]];
-    }
-
-    return std::make_tuple(levels, level_counts, static_cast<int>(level_counts.size()));
+    return std::make_tuple(domains_per_level, static_cast<int>(domains_per_level.size()));
 }
 
 } // end namespace Opm
