@@ -194,6 +194,9 @@ public:
         // Initialize domain_needs_solving_ to true for all domains
         domain_needs_solving_.resize(num_domains, true);
 
+        // Initialize previous_local_nonlinear_iters_ to 0 for all domains
+        previous_local_nonlinear_iters_.resize(num_domains, 0);
+
         // Set up container for the local system matrices.
         domain_matrices_.resize(num_domains);
 
@@ -324,7 +327,10 @@ public:
 
             // Solve level by level
             for (int level = 0; level < num_levels; ++level) {
-                const auto& level_domains = domains_per_level[level];
+                // Sort domains within level by expected computational cost (descending)
+                // Start expensive domains first to minimize thread idle time
+                const auto level_domains = sortDomainsByComputationalCost(domains_per_level[level]);
+                
                 if (is_iorank && level_domains.size() > 1) {
                     OpmLog::debug(fmt::format("  Level {}: solving {} domains in parallel", level, level_domains.size()));
                 }
@@ -399,15 +405,19 @@ public:
             omp_set_max_active_levels(1);
 #endif
 
+            // Sort domains by expected computational cost (descending)
+            // Start expensive domains first to minimize thread idle time
+            const auto sorted_domain_order = sortDomainsByComputationalCost(domain_order);
+
             // Thread-local loggers to avoid data races (DeferredLogger is not thread-safe)
             // Commented out for now during development
-            //std::vector<DeferredLogger> thread_loggers(domain_order.size());
+            //std::vector<DeferredLogger> thread_loggers(sorted_domain_order.size());
 
 #if _OPENMP
 #pragma omp parallel for schedule(dynamic)
 #endif
-            for (size_t i = 0; i < domain_order.size(); ++i) {
-                const int domain_index = domain_order[i];
+            for (size_t i = 0; i < sorted_domain_order.size(); ++i) {
+                const int domain_index = sorted_domain_order[i];
                 const auto& domain = domains_[domain_index];
                 SimulatorReportSingle local_report;
                 DeferredLogger dummy_logger; // Local logger, not used for now
@@ -592,6 +602,9 @@ public:
         local_reports_accumulated_.success.total_time += total_local_solve_time;
         local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
 
+        // Store current iteration's local nonlinear iterations for next iteration's load balancing
+        previous_local_nonlinear_iters_ = local_nonlinear_iters;
+
         // Finish with a Newton step.
         // Note that the "iteration + 100" is a simple way to avoid entering
         // "if (iteration == 0)" and similar blocks, and also makes it a little
@@ -724,9 +737,9 @@ public:
 
 private:
     //! \brief Solve the equation system for a single domain.
-    //! 
+    //!
     //! Thread safety analysis results:
-    //! 
+    //!
     //! ROOT CAUSE: wellModel_.assemble() accesses shared state:
     //!   - wellModel_.wellState() (modified by updateWellControl)
     //!   - wellModel_.groupState() (read-only but concurrent access)
@@ -1267,6 +1280,34 @@ private:
         }
     }
 
+    //! \brief Sort domains by expected computational cost (descending)
+    //! \details Uses previous iteration's local nonlinear iterations as primary criterion,
+    //!          and domain size as secondary criterion. Takes input by value and sorts in-place
+    //!          for optimal performance (avoids extra copy via move semantics).
+    std::vector<int> sortDomainsByComputationalCost(std::vector<int> domains) const
+    {
+        if (domains.size() <= 1) {
+            return domains;
+        }
+
+        std::stable_sort(domains.begin(), domains.end(), [this](int d1, int d2) {
+            // Primary: sort by previous iteration's local nonlinear iterations
+            const auto iters1 = previous_local_nonlinear_iters_[d1];
+            const auto iters2 = previous_local_nonlinear_iters_[d2];
+
+            if (iters1 != iters2) {
+                return iters1 > iters2; // More iterations first
+            }
+
+            // Secondary: sort by domain size (number of cells)
+            const auto& domain1 = domains_[d1];
+            const auto& domain2 = domains_[d2];
+            return domain1.cells.size() > domain2.cells.size();
+        });
+
+        return domains; // RVO (Return Value Optimization) or move
+    }
+
     //! \brief Compute parallel levels using the selected strategy
     std::tuple<std::vector<std::vector<int>>, int>
     computeParallelLevelsWithStrategy(const std::vector<int>& domain_order,
@@ -1702,7 +1743,7 @@ private:
             file << "      \"domain_index\": " << domain.index << ",\n";
             file << "      \"num_cells\": " << domain.cells.size() << ",\n";
             file << "      \"skip\": " << (domain.skip ? "true" : "false") << ",\n";
-            
+
             // Write well counts
             auto inj_it = data.domain_injector_count.find(domain.index);
             auto prod_it = data.domain_producer_count.find(domain.index);
@@ -1774,13 +1815,18 @@ private:
 
         file << "Domain connectivity:\n";
         file << "-------------------\n";
-        file << fmt::format("{:>8} {:>12} {:>12} {:>12} {:>15} {:>20}\n", 
-                           "Domain", "Num Cells", "Injectors", "Producers", "Num Neighbors", "Neighbor List");
+        file << fmt::format("{:>8} {:>12} {:>12} {:>12} {:>15} {:>20}\n",
+                            "Domain",
+                            "Num Cells",
+                            "Injectors",
+                            "Producers",
+                            "Num Neighbors",
+                            "Neighbor List");
 
         for (const auto& domain : domains_) {
             auto it = data.domain_neighbors.find(domain.index);
             const int num_neighbors = (it != data.domain_neighbors.end()) ? it->second.size() : 0;
-            
+
             auto inj_it = data.domain_injector_count.find(domain.index);
             auto prod_it = data.domain_producer_count.find(domain.index);
             const int num_injectors = (inj_it != data.domain_injector_count.end()) ? inj_it->second : 0;
@@ -1797,9 +1843,13 @@ private:
                 }
             }
 
-            file << fmt::format(
-                "{:>8} {:>12} {:>12} {:>12} {:>15} {:>20}\n", 
-                domain.index, domain.cells.size(), num_injectors, num_producers, num_neighbors, neighbor_list.str());
+            file << fmt::format("{:>8} {:>12} {:>12} {:>12} {:>15} {:>20}\n",
+                                domain.index,
+                                domain.cells.size(),
+                                num_injectors,
+                                num_producers,
+                                num_neighbors,
+                                neighbor_list.str());
         }
 
         file << "\n\nDetailed connection counts:\n";
@@ -1830,11 +1880,11 @@ private:
         record.domain_order = domain_order;
         record.measures = measures;
         record.local_nonlinear_iterations = local_iters;
-        
+
         // Count injector and producer wells per domain
         record.num_injectors_per_domain.resize(domains_.size(), 0);
         record.num_producers_per_domain.resize(domains_.size(), 0);
-        
+
         for (const auto& well : model_.wellModel().localNonshutWells()) {
             const auto& well_name = well->name();
             const auto& well_domain_map = wellModel_.well_domain();
@@ -1850,7 +1900,7 @@ private:
                 }
             }
         }
-        
+
         domain_ordering_history_.push_back(record);
     }
 
@@ -2008,6 +2058,8 @@ private:
     mutable std::vector<DomainOrderingRecord> domain_ordering_history_;
     // Cached neighborhood data (computed once in constructor)
     DomainNeighborhoodData cached_neighborhood_data_;
+    // Store the previous iteration's local nonlinear iterations per domain for load balancing
+    std::vector<int> previous_local_nonlinear_iters_;
 };
 
 } // namespace Opm
