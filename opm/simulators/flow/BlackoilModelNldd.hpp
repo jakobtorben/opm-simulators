@@ -295,7 +295,7 @@ public:
             Dune::Timer parallel_level_timer;
             parallel_level_timer.start();
             const auto [domains_per_level, num_levels]
-                = computeDomainParallelLevels(domain_order, cached_neighborhood_data_.domain_neighbors);
+                = computeParallelLevelsWithStrategy(domain_order, cached_neighborhood_data_.domain_neighbors);
             const double parallel_level_time = parallel_level_timer.stop();
 
             if (this->rank_ == 0) {
@@ -307,11 +307,11 @@ public:
                 const double parallelism = num_levels > 0 ? static_cast<double>(domain_order.size()) / num_levels : 1.0;
 #if _OPENMP
                 const int num_threads = omp_get_max_threads();
-                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains using {} parallel levels (parallelism: {:.2f}x) with {} OpenMP threads",
-                                         domain_order.size(), num_levels, parallelism, num_threads));
+                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains using {} parallel levels (parallelism: {:.2f}x) with {} OpenMP threads (strategy: {})",
+                                         domain_order.size(), num_levels, parallelism, num_threads, model_.param().nldd_parallel_color_strategy_));
 #else
-                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains using {} parallel levels (parallelism: {:.2f}x) - OpenMP disabled",
-                                         domain_order.size(), num_levels, parallelism));
+                OpmLog::info(fmt::format("NLDD OpenMP: Solving {} domains using {} parallel levels (parallelism: {:.2f}x) - OpenMP disabled (strategy: {})",
+                                         domain_order.size(), num_levels, parallelism, model_.param().nldd_parallel_color_strategy_));
 #endif
             }
 
@@ -679,7 +679,7 @@ public:
         // Compute neighborhood data and parallel levels
         const auto& neighborhood_data = analyzeDomainNeighborhoods();
         const auto [domains_per_level, num_levels]
-            = computeDomainParallelLevels(domain_order, neighborhood_data.domain_neighbors);
+            = computeParallelLevelsWithStrategy(domain_order, neighborhood_data.domain_neighbors);
 
         // Convert to domain->level mapping for output function
         std::vector<int> levels(domains_.size());
@@ -1267,6 +1267,19 @@ private:
         }
     }
 
+    //! \brief Compute parallel levels using the selected strategy
+    std::tuple<std::vector<std::vector<int>>, int>
+    computeParallelLevelsWithStrategy(const std::vector<int>& domain_order,
+                                      const std::map<int, std::set<int>>& adjacency) const
+    {
+        if (model_.param().nldd_parallel_color_strategy_ == "greedy") {
+            return computeDomainParallelLevelsGreedy(domain_order, adjacency);
+        } else {
+            // Default to "order" strategy
+            return computeDomainParallelLevels(domain_order, adjacency);
+        }
+    }
+
     //! \brief Compute and print parallel levels for current domain ordering
     void computeAndPrintParallelLevels() const
     {
@@ -1278,17 +1291,18 @@ private:
             const auto& domain_order = domain_ordering_history_.back().domain_order;
             const auto& neighborhood_data = analyzeDomainNeighborhoods();
             const auto [domains_per_level, num_levels]
-                = computeDomainParallelLevels(domain_order, neighborhood_data.domain_neighbors);
+                = computeParallelLevelsWithStrategy(domain_order, neighborhood_data.domain_neighbors);
 
             const double parallelism = num_levels > 0 ? static_cast<double>(domain_order.size()) / num_levels : 1.0;
 
             // Print summary
             OpmLog::info("===== Parallel Level Analysis =====");
-            OpmLog::info(fmt::format("Domains: {}  |  Levels: {}  |  Parallelism: {:.2f}x  |  Method: {}",
+            OpmLog::info(fmt::format("Domains: {}  |  Levels: {}  |  Parallelism: {:.2f}x  |  Method: {}  |  Strategy: {}",
                                      domain_order.size(),
                                      num_levels,
                                      parallelism,
-                                     orderingMethodToString()));
+                                     orderingMethodToString(),
+                                     model_.param().nldd_parallel_color_strategy_));
             OpmLog::info("\nDomains per level:");
             for (int level = 0; level < num_levels; ++level) {
                 OpmLog::info(fmt::format("  Level {:2d}: {:3d} domains", level, domains_per_level[level].size()));

@@ -306,6 +306,61 @@ getMatrixRowColoring(const M& matrix, ColoringType coloringType)
             colorCnt.data(), colorCnt.data() + colorCnt.size()};
 }
 
+/// \brief Compute parallel levels for domain ordering using greedy coloring
+/// \details Given a domain ordering and adjacency, uses greedy graph coloring to assign
+///          colors (levels) to domains. Domains with the same color can be solved in parallel.
+///          Within each color, the original ordering is preserved.
+/// \param domain_order The ordered list of domain indices to process (used as coloring strategy)
+/// \param adjacency Map from domain index to set of neighboring domain indices
+/// \return Tuple of (domains grouped by level, number of levels)
+inline std::tuple<std::vector<std::vector<int>>, int>
+computeDomainParallelLevelsGreedy(const std::vector<int>& domain_order, const std::map<int, std::set<int>>& adjacency)
+{
+    OPM_TIMEBLOCK(computeDomainParallelLevelsGreedy);
+
+    std::map<int, int> domain_colors; // domain_id -> color
+
+    // Greedy coloring: for each domain in order, assign smallest color that doesn't conflict with neighbors
+    for (const int domain : domain_order) {
+        // Find colors used by already-colored neighbors
+        std::set<int> neighbor_colors;
+        auto adj_it = adjacency.find(domain);
+        if (adj_it != adjacency.end()) {
+            for (int neighbor : adj_it->second) {
+                auto color_it = domain_colors.find(neighbor);
+                if (color_it != domain_colors.end()) {
+                    neighbor_colors.insert(color_it->second);
+                }
+            }
+        }
+
+        // Find smallest available color
+        int color = 0;
+        while (neighbor_colors.count(color) > 0) {
+            ++color;
+        }
+
+        domain_colors[domain] = color;
+    }
+
+    // Group domains by color, maintaining original order within each color
+    std::map<int, std::vector<int>> color_groups;
+    for (const int domain : domain_order) {
+        color_groups[domain_colors[domain]].push_back(domain);
+    }
+
+    // Convert to output format
+    std::vector<std::vector<int>> domains_per_level;
+    for (const auto& [color, domains] : color_groups) {
+        if (static_cast<std::size_t>(color) >= domains_per_level.size()) {
+            domains_per_level.resize(color + 1);
+        }
+        domains_per_level[color] = domains;
+    }
+
+    return std::make_tuple(domains_per_level, static_cast<int>(domains_per_level.size()));
+}
+
 /// \brief Compute parallel levels for domain ordering
 /// \details Given a domain ordering and adjacency, computes which domains can be
 ///          solved in parallel. Level i domains only depend on domains in levels < i.
