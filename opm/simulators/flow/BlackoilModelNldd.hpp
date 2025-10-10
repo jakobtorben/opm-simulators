@@ -348,12 +348,16 @@ public:
                     SimulatorReportSingle local_report;
                     DeferredLogger dummy_logger; // Local logger, not used for now
 
+                    Dune::Timer domain_timer;
+                    domain_timer.start();
+
                     domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
                     updateMobilities(domain);
 
                     if (domain.skip || !domain_needs_solving_[domain_index]) {
                         local_report.skipped_domains = true;
                         local_report.converged = true;
+                        local_report.solver_time += domain_timer.stop();
                         domain_reports[domain.index] = local_report;
                         continue;
                     }
@@ -365,6 +369,7 @@ public:
                     catch (...) {
                         local_report.converged = false;
                     }
+                    local_report.solver_time += domain_timer.stop();
 
                     // Logging commented out for now during development
                     //if (!local_report.converged) {
@@ -422,12 +427,16 @@ public:
                 SimulatorReportSingle local_report;
                 DeferredLogger dummy_logger; // Local logger, not used for now
 
+                Dune::Timer domain_timer;
+                domain_timer.start();
+
                 domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
                 updateMobilities(domain);
 
                 if (domain.skip || !domain_needs_solving_[domain_index]) {
                     local_report.skipped_domains = true;
                     local_report.converged = true;
+                    local_report.solver_time += domain_timer.stop();
                     domain_reports[domain.index] = local_report;
                     continue;
                 }
@@ -439,6 +448,7 @@ public:
                 catch (...) {
                     local_report.converged = false;
                 }
+                local_report.solver_time += domain_timer.stop();
 
                 // Logging commented out for now during development
                 //if (!local_report.converged) {
