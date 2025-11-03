@@ -18,12 +18,15 @@
 #define OPM_ISTLSOLVERGPUISTL_HEADER_INCLUDED
 
 #include <dune/istl/operators.hh>
+#include <filesystem>
+#include <iomanip>
 #include <memory>
 #include <optional>
 #include <opm/grid/utility/ElementChunks.hpp>
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/getQuasiImpesWeights.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
+#include <sstream>
 
 #if USE_HIP
 #include <opm/simulators/linalg/gpuistl_hip/GpuSparseMatrixWrapper.hpp>
@@ -40,6 +43,7 @@
 #include <opm/simulators/linalg/findOverlapRowsAndColumns.hpp>
 #include <opm/simulators/linalg/gpuistl/detail/FlexibleSolverWrapper.hpp>
 #include <opm/simulators/linalg/printlinearsolverparameter.hpp>
+#include <opm/simulators/linalg/WriteSystemMatrixHelper.hpp>
 
 namespace Opm::gpuistl
 {
@@ -202,6 +206,8 @@ public:
             }
             updateMatrix(M);
             updateRhs(b);
+            m_hostMatrix = &M;
+            m_hostRhs = &b;
         }
         OPM_CATCH_AND_RETHROW_AS_CRITICAL_ERROR("This is likely due to a faulty linear solver JSON specification. "
                                                 "Check for errors related to missing nodes.");
@@ -256,7 +262,17 @@ public:
      */
     bool solve(Vector& x) override
     {
-        // TODO: Write matrix to disk if needed
+        const auto verbosity = m_propertyTree.get("verbosity", 0);
+        const bool writeMatrix = verbosity > 10;
+        if (writeMatrix && m_hostMatrix && m_hostRhs) {
+            if (m_writeCount % 600 == 0) {
+                Opm::Helper::writeSystem(m_simulator,
+                                         *m_hostMatrix,
+                                         *m_hostRhs,
+                                         m_comm.get());
+            }
+            ++m_writeCount;
+        }
         Dune::InverseOperatorResult result;
         if (!m_matrix) {
             OPM_THROW(std::runtime_error, "m_matrix not initialized, prepare(matrix, rhs); needs to be called");
@@ -429,6 +445,7 @@ private:
                 const_cast<real_type*>(&M[0][0][0][0]),
                 M.nonzeroes() * M[0][0].N() * M[0][0].M()
             );
+            configureWeightsOutputPath();
             std::function<GPUVector&()> weightsCalculator = getWeightsCalculator();
             m_gpuSolver = std::make_unique<SolverType>(
                 *m_matrix, isParallel(), m_propertyTree, pressureIndex, weightsCalculator, m_forceSerial, m_comm.get());
@@ -481,6 +498,35 @@ private:
     std::vector<int> m_interiorRows;
     std::vector<int> m_overlapRows;
     std::any m_parallelInformation;
+
+    const Matrix* m_hostMatrix = nullptr;
+    Vector* m_hostRhs = nullptr;
+    int m_writeCount = 0;
+    int m_weightWriteCount = 0;
+
+    void configureWeightsOutputPath()
+    {
+        namespace fs = std::filesystem;
+        const auto verbosity = m_propertyTree.get("verbosity", 0);
+        if (verbosity <= 10) {
+            return;
+        }
+
+        const auto reportsDir = fs::path{m_simulator.problem().outputDir()} / "reports";
+        fs::create_directories(reportsDir);
+
+        std::ostringstream oss;
+        oss << "prob_"  << m_simulator.episodeIndex()
+            << "_time_" << std::setprecision(15) << std::setw(12) << std::setfill('0') << m_simulator.time()
+            << "_nit_"  << m_simulator.model().newtonMethod().numIterations()
+            << "_weights_" << std::setw(6) << std::setfill('0') << m_weightWriteCount
+            << "_istl";
+
+        const auto filename = (reportsDir / oss.str()).generic_string() + ".mm";
+        ++m_weightWriteCount;
+
+        m_propertyTree.put("preconditioner.weights_filename", filename);
+    }
 
 };
 } // namespace Opm::gpuistl

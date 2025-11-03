@@ -54,7 +54,9 @@
 
 #include <any>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -272,6 +274,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                 }
             }
             flexibleSolver_.resize(prm_.size());
+        weightsWriteCount_.assign(prm_.size(), 0);
 
             const bool on_io_rank = (simulator_.gridView().comm().rank() == 0);
 #if HAVE_MPI
@@ -412,10 +415,14 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
             const int verbosity = prm_[activeSolverNum_].get("verbosity", 0);
             const bool write_matrix = verbosity > 10;
             if (write_matrix) {
-                Helper::writeSystem(simulator_, //simulator is only used to get names
-                                    getMatrix(),
-                                    *rhs_,
-                                    comm_.get());
+                static int write_count = 0;
+                if (write_count % 600 == 0) {
+                    Helper::writeSystem(simulator_, //simulator is only used to get names
+                                        getMatrix(),
+                                        *rhs_,
+                                        comm_.get());
+                }
+                ++write_count;
             }
 
             // Solve system.
@@ -479,6 +486,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         {
             OPM_TIMEBLOCK(flexibleSolverPrepare);
             if (shouldCreateSolver()) {
+            configureWeightsOutputPath(activeSolverNum_);
                 if (!useWellConn_) {
                     if (isNlddLocalSolver()) {
                         auto wellOp = std::make_unique<DomainWellModelAsLinearOperator<WellModel, Vector, Vector>>(simulator_.problem().wellModel());
@@ -664,9 +672,42 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         std::vector<FlowLinearSolverParameters> parameters_;
         bool forceSerial_ = false;
         std::vector<PropertyTree> prm_;
+        std::vector<int> weightsWriteCount_;
 
         std::shared_ptr< CommunicationType > comm_;
         std::unique_ptr<ElementChunksType> element_chunks_;
+
+        void configureWeightsOutputPath(int solverIdx)
+        {
+            namespace fs = std::filesystem;
+            if (solverIdx < 0 || solverIdx >= static_cast<int>(prm_.size())) {
+                return;
+            }
+
+            const auto verbosity = prm_[solverIdx].get("verbosity", 0);
+            if (verbosity <= 10) {
+                return;
+            }
+
+            const auto reportsDir = fs::path{simulator_.problem().outputDir()} / "reports";
+            fs::create_directories(reportsDir);
+
+            if (weightsWriteCount_.empty()) {
+                weightsWriteCount_.assign(prm_.size(), 0);
+            }
+
+            std::ostringstream oss;
+            oss << "prob_"  << simulator_.episodeIndex()
+                << "_time_" << std::setprecision(15) << std::setw(12) << std::setfill('0') << simulator_.time()
+                << "_nit_"  << simulator_.model().newtonMethod().numIterations()
+                << "_weights_" << std::setw(6) << std::setfill('0') << weightsWriteCount_[solverIdx]
+                << "_istl";
+
+            const auto filename = (reportsDir / oss.str()).generic_string() + ".mm";
+            ++weightsWriteCount_[solverIdx];
+
+            prm_[solverIdx].put("preconditioner.weights_filename", filename);
+        }
     }; // end ISTLSolver
 
 } // namespace Opm

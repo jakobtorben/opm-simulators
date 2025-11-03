@@ -103,15 +103,20 @@ public:
                            prm.get<int>("post_smooth", 1))
         , prm_(prm)
     {
+        // Write out the weights every 600 times.
+        static int write_count_serial = 0;
         if (prm.get<int>("verbosity", 0) > 10) {
-            std::string filename = prm.get<std::string>("weights_filename", "impes_weights.txt");
-            std::ofstream outfile(filename);
-            if (!outfile) {
-                OPM_THROW(std::ofstream::failure,
-                          "Could not write weights to file " + filename + ".");
+            if (write_count_serial % 600 == 0) {
+                std::string filename = prm.get<std::string>("weights_filename", "impes_weights.txt");
+                std::ofstream outfile(filename);
+                if (!outfile) {
+                    OPM_THROW(std::ofstream::failure,
+                              "Could not write weights to file " + filename + ".");
+                }
+                // Unqualified on purpose to enable ADL for GPU/CPU types
+                writeMatrixMarket(weights_, outfile);
             }
-            // Unqualified on purpose to enable ADL for GPU/CPU types
-            writeMatrixMarket(weights_, outfile);
+            ++write_count_serial;
         }
     }
 
@@ -137,15 +142,19 @@ public:
                            prm.get<int>("post_smooth", 1))
         , prm_(prm)
     {
+        static int write_count_parallel = 0;
         if (prm.get<int>("verbosity", 0) > 10 && comm.communicator().rank() == 0) {
-            auto filename = prm.get<std::string>("weights_filename", "impes_weights.txt");
-            std::ofstream outfile(filename);
-            if (!outfile) {
-                OPM_THROW(std::ofstream::failure,
-                          "Could not write weights to file " + filename + ".");
+            if (write_count_parallel % 600 == 0) {
+                auto filename = prm.get<std::string>("weights_filename", "impes_weights.txt");
+                std::ofstream outfile(filename);
+                if (!outfile) {
+                    OPM_THROW(std::ofstream::failure,
+                              "Could not write weights to file " + filename + ".");
+                }
+                // Unqualified on purpose to enable ADL for GPU/CPU types
+                writeMatrixMarket(weights_, outfile);
             }
-            // Unqualified on purpose to enable ADL for GPU/CPU types
-            writeMatrixMarket(weights_, outfile);
+            ++write_count_parallel;
         }
     }
 
