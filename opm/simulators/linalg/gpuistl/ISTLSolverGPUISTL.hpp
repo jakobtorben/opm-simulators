@@ -18,12 +18,15 @@
 #define OPM_ISTLSOLVERGPUISTL_HEADER_INCLUDED
 
 #include <dune/istl/operators.hh>
+#include <filesystem>
+#include <iomanip>
 #include <memory>
 #include <optional>
 #include <opm/grid/utility/ElementChunks.hpp>
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/getQuasiImpesWeights.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
+#include <sstream>
 
 #if USE_HIP
 #include <opm/simulators/linalg/gpuistl_hip/GpuSparseMatrixWrapper.hpp>
@@ -40,6 +43,7 @@
 #include <opm/simulators/linalg/findOverlapRowsAndColumns.hpp>
 #include <opm/simulators/linalg/gpuistl/detail/FlexibleSolverWrapper.hpp>
 #include <opm/simulators/linalg/printlinearsolverparameter.hpp>
+#include <opm/simulators/linalg/WriteSystemMatrixHelper.hpp>
 
 namespace Opm::gpuistl
 {
@@ -202,6 +206,8 @@ public:
             }
             updateMatrix(M);
             updateRhs(b);
+            m_hostMatrix = &M;
+            m_hostRhs = &b;
         }
         OPM_CATCH_AND_RETHROW_AS_CRITICAL_ERROR("This is likely due to a faulty linear solver JSON specification. "
                                                 "Check for errors related to missing nodes.");
@@ -256,7 +262,14 @@ public:
      */
     bool solve(Vector& x) override
     {
-        // TODO: Write matrix to disk if needed
+        const auto verbosity = m_propertyTree.get("verbosity", 0);
+        const bool writeMatrix = verbosity > 10;
+        if (writeMatrix && m_hostMatrix && m_hostRhs) {
+            Opm::Helper::writeSystem(m_simulator,
+                                     *m_hostMatrix,
+                                     *m_hostRhs,
+                                     m_comm.get());
+        }
         Dune::InverseOperatorResult result;
         if (!m_matrix) {
             OPM_THROW(std::runtime_error, "m_matrix not initialized, prepare(matrix, rhs); needs to be called");
@@ -481,6 +494,9 @@ private:
     std::vector<int> m_interiorRows;
     std::vector<int> m_overlapRows;
     std::any m_parallelInformation;
+
+    const Matrix* m_hostMatrix = nullptr;
+    Vector* m_hostRhs = nullptr;
 
 };
 } // namespace Opm::gpuistl
