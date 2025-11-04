@@ -188,6 +188,15 @@ void FlowLinearSolverParameters::registerParameters()
         ("Enable OpenMP thread parallelization of CPR weight calculation. "
             "This can improve performance for large models but is disabled by default."
             "Usage: --cpr-weights-thread-parallel=[true|false]. ");
+    Parameters::Register<Parameters::WriteLinearSystem>
+        ("Write linear system (matrix, RHS, and CPR weights) to disk."
+            "The files will be written to the output-directory/reports/ in MatrixMarket format. "
+            "Usage: --write-linear-system=[true|false]. ");
+    Parameters::Register<Parameters::WriteLinearSystemInterval>
+        ("Interval for writing the linear system to disk. "
+            "The system will be written every N-th solve, where N is the interval value. "
+            "Only takes effect when --write-linear-system=true. "
+            "Usage: --write-linear-system-interval=<integer>. ");
 
     Parameters::SetDefault<Parameters::LinearSolverVerbosity>(0);
 }

@@ -406,11 +406,10 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         bool solve(Vector& x) override
         {
             OPM_TIMEBLOCK(istlSolverSolve);
-            ++solveCount_;
             // Write linear system if asked for.
-            const int verbosity = prm_[activeSolverNum_].get("verbosity", 0);
-            const bool write_matrix = verbosity > 10;
-            if (write_matrix) {
+            const bool write_linear_system = Parameters::Get<Parameters::WriteLinearSystem>();
+            const int write_interval = Parameters::Get<Parameters::WriteLinearSystemInterval>();
+            if (write_linear_system && (solveCount_ % write_interval == 0)) {
                 Helper::writeSystem(simulator_, //simulator is only used to get names
                                     getMatrix(),
                                     *rhs_,
@@ -426,6 +425,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                 assert(flexibleSolver_[activeSolverNum_].solver_);
                 flexibleSolver_[activeSolverNum_].solver_->apply(x, *rhs_, result);
             }
+
+            ++solveCount_;
 
             iterations_ = result.iterations;
 

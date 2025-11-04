@@ -238,15 +238,15 @@ public:
         }
 
         OPM_TIMEBLOCK(istlSolverGpuBridgeSolve);
-        this->solveCount_ += 1;
         // Write linear system if asked for.
-        const int verbosity = this->prm_[this->activeSolverNum_].template get<int>("verbosity", 0);
-        const bool write_matrix = verbosity > 10;
-        if (write_matrix) {
+        const bool write_linear_system = Parameters::Get<Parameters::WriteLinearSystem>();
+        const int write_interval = Parameters::Get<Parameters::WriteLinearSystemInterval>();
+        if (write_linear_system && (this->solveCount_ % write_interval == 0)) {
             Helper::writeSystem(this->simulator_, //simulator is only used to get names
                                 this->getMatrix(),
                                 *(this->rhs_),
                                 this->comm_.get());
+            // TODO: Write CPR weights if needed
         }
 
         // Solve system.
@@ -269,6 +269,8 @@ public:
             assert(this->flexibleSolver_[this->activeSolverNum_].solver_);
             this->flexibleSolver_[this->activeSolverNum_].solver_->apply(x, *(this->rhs_), result);
         }
+
+        this->solveCount_ += 1;
 
         // Check convergence, iterations etc.
         return this->checkConvergence(result);
