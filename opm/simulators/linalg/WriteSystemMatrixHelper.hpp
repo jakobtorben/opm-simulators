@@ -240,7 +240,7 @@ namespace Opm::Helper {
                      const VectorType&    rhs,
                      const Communicator*  comm)
     {
-        writeSystem(simulator, matrix, rhs, "flow_", comm);
+        writeSystem(simulator, matrix, rhs, "flow", comm);
     }
 
     /// Output a Dune ISTL linear system from linearising a set of
@@ -280,7 +280,7 @@ namespace Opm::Helper {
                          const VectorType&    rhs,
                          const Communicator*  comm)
     {
-        writeSystem(simulator, matrix, rhs, "mech_", comm);
+        writeSystem(simulator, matrix, rhs, "mech", comm);
     }
 
     /// Output CPR preconditioner weights to file in MatrixMarket format.
