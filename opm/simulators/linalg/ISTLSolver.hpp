@@ -57,7 +57,6 @@
 #include <functional>
 #include <memory>
 #include <set>
-#include <sstream>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -416,6 +415,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                                     getMatrix(),
                                     *rhs_,
                                     comm_.get());
+                std::function<Vector()> weightCalculator = this->getWeightsCalculator(prm_[activeSolverNum_], getMatrix(), pressureIndex);
+                writeCPRWeights(weightCalculator);
             }
 
             // Solve system.
@@ -641,6 +642,13 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         const Matrix& getMatrix() const
         {
             return *matrix_;
+        }
+
+        void writeCPRWeights(const std::function<Vector()>& weightCalculator)
+        {
+            // Calculate the updated CPR weights
+            Vector weights = weightCalculator();
+            Helper::writeCPRWeights(simulator_, weights, comm_.get());
         }
 
         const Simulator& simulator_;

@@ -283,6 +283,35 @@ namespace Opm::Helper {
         writeSystem(simulator, matrix, rhs, "mech_", comm);
     }
 
+    /// Output CPR preconditioner weights to file in MatrixMarket format.
+    ///
+    /// \tparam SimulatorType Packaged simulator type.  Expected to
+    /// provide, among other services, an episode index, a simulation
+    /// time, and a physical model.
+    ///
+    /// \tparam VectorType Object type for a linear system vector object.
+    /// Typically a linear system vector type from the Dune ISTL.
+    ///
+    /// \tparam Communicator ISTL communication type.  Typically
+    /// \code Dune::OwnerOverlapCopyCommunication<> \endcode or similar.
+    ///
+    /// \param[in] simulator Simulator object.
+    ///
+    /// \param[in] weights CPR preconditioner weights vector.  Expected to
+    /// be a Dune ISTL vector.
+    ///
+    /// \param[in] comm Dune ISTL communication object.  Unused in builds
+    /// without MPI support.  You may use a nullptr value in a sequential
+    /// run of an MPI-enabled build to signify that parallel output is
+    /// unneeded.
+    template <class SimulatorType, class VectorType, class Communicator>
+    void writeCPRWeights(const SimulatorType& simulator,
+                         const VectorType&    weights,
+                         const Communicator*  comm)
+    {
+        detail::writeMatrixMarketObject(simulator, weights, "flow_CPRweights", comm);
+    }
+
 } // namespace Opm::Helper
 
 #endif // OPM_WRITESYSTEMMATRIXHELPER_HEADER_INCLUDED

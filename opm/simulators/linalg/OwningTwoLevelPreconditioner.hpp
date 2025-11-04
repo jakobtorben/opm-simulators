@@ -30,8 +30,6 @@
 #include <dune/istl/bcrsmatrix.hh>
 #include <dune/istl/paamg/amg.hh>
 
-#include <fstream>
-#include <type_traits>
 
 
 namespace Opm
@@ -103,16 +101,6 @@ public:
                            prm.get<int>("post_smooth", 1))
         , prm_(prm)
     {
-        if (prm.get<int>("verbosity", 0) > 10) {
-            std::string filename = prm.get<std::string>("weights_filename", "impes_weights.txt");
-            std::ofstream outfile(filename);
-            if (!outfile) {
-                OPM_THROW(std::ofstream::failure,
-                          "Could not write weights to file " + filename + ".");
-            }
-            // Unqualified on purpose to enable ADL for GPU/CPU types
-            writeMatrixMarket(weights_, outfile);
-        }
     }
 
     OwningTwoLevelPreconditioner(const OperatorType& linearoperator, const Opm::PropertyTree& prm,
@@ -137,16 +125,6 @@ public:
                            prm.get<int>("post_smooth", 1))
         , prm_(prm)
     {
-        if (prm.get<int>("verbosity", 0) > 10 && comm.communicator().rank() == 0) {
-            auto filename = prm.get<std::string>("weights_filename", "impes_weights.txt");
-            std::ofstream outfile(filename);
-            if (!outfile) {
-                OPM_THROW(std::ofstream::failure,
-                          "Could not write weights to file " + filename + ".");
-            }
-            // Unqualified on purpose to enable ADL for GPU/CPU types
-            writeMatrixMarket(weights_, outfile);
-        }
     }
 
     virtual void pre(VectorType& x, VectorType& b) override

@@ -18,15 +18,12 @@
 #define OPM_ISTLSOLVERGPUISTL_HEADER_INCLUDED
 
 #include <dune/istl/operators.hh>
-#include <filesystem>
-#include <iomanip>
 #include <memory>
 #include <optional>
 #include <opm/grid/utility/ElementChunks.hpp>
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/getQuasiImpesWeights.hpp>
 #include <opm/simulators/linalg/ISTLSolver.hpp>
-#include <sstream>
 
 #if USE_HIP
 #include <opm/simulators/linalg/gpuistl_hip/GpuSparseMatrixWrapper.hpp>
@@ -269,6 +266,7 @@ public:
                                      *m_hostMatrix,
                                      *m_hostRhs,
                                      m_comm.get());
+            writeCPRWeights();
         }
         Dune::InverseOperatorResult result;
         if (!m_matrix) {
@@ -465,6 +463,23 @@ private:
         }
     }
 
+    void writeCPRWeights()
+    {
+        // Only write if CPR weights exist
+        if (m_cpuWeights.size() == 0 && !m_weights.has_value()) {
+            return;
+        }
+
+        Vector weightsToWrite(m_matrix->N());
+        if (m_cpuWeights.size() > 0) {
+            weightsToWrite = m_cpuWeights;
+        } else {
+            m_weights->copyToHost(weightsToWrite);
+        }
+
+        Opm::Helper::writeCPRWeights(m_simulator, weightsToWrite, m_comm.get());
+    }
+
     FlowLinearSolverParameters m_parameters;
     const Simulator& m_simulator;
     const bool m_forceSerial;
@@ -497,7 +512,6 @@ private:
 
     const Matrix* m_hostMatrix = nullptr;
     Vector* m_hostRhs = nullptr;
-
 };
 } // namespace Opm::gpuistl
 
