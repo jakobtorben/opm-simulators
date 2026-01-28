@@ -232,6 +232,9 @@ beginIteration()
         elemCtx.updatePrimaryIntensiveQuantities(/*timeIdx=*/0);
     }
 
+    // TODO: flowexperimental uses NewtonMethod which manages iteration internally.
+    // Consider migrating to NewtonIterationContext for consistency with main Flow.
+    // For now, numIterations() is valid here as it's called during NewtonMethod's iteration.
     assemble(simulator_.model().newtonMethod().numIterations(), simulator_.timeStepSize());
 }
 

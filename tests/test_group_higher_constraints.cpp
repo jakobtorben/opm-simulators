@@ -57,6 +57,7 @@
 #include <opm/input/eclipse/Schedule/Group/GuideRateModel.hpp>
 #include <opm/input/eclipse/Units/Units.hpp>
 #include <opm/simulators/flow/FlowProblemBlackoil.hpp>
+#include <opm/simulators/flow/NewtonIterationContext.hpp>
 #include <opm/simulators/wells/BlackoilWellModel.hpp>
 #include <opm/simulators/wells/WellState.hpp>
 #include <opm/simulators/wells/GroupState.hpp>
@@ -236,7 +237,10 @@ private:
         simulator_->setEpisodeLength(0.0);
         simulator_->startNextEpisode(/*episodeStartTime=*/0.0, /*episodeLength=*/1e30);
         simulator_->setTimeStepSize(Opm::unit::day);
-        simulator_->model().newtonMethod().setIterationIndex(0);
+        // Set iteration context so code using problem().iterationContext() sees first iteration
+        Opm::NewtonIterationContext iterCtx;
+        iterCtx.resetForNewTimestep();
+        simulator_->problem().setIterationContext(iterCtx);
 
         wellModel().beginReportStep(report_step_idx_);
 

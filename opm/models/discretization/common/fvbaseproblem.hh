@@ -34,6 +34,8 @@
 #include <opm/models/discretization/common/fvbaseproperties.hh>
 #include <opm/models/discretization/common/restrictprolong.hh>
 
+#include <opm/simulators/flow/NewtonIterationContext.hpp>
+
 #include <opm/models/io/vtkmultiwriter.hh>
 #include <opm/models/io/restart.hpp>
 
@@ -815,6 +817,28 @@ public:
      */
     VtkMultiWriter& defaultVtkWriter() const
     { return *defaultVtkWriter_; }
+
+    /*!
+     * \brief Returns the iteration context for iteration-dependent decisions.
+     *
+     * This default implementation provides a context based on the model's
+     * Newton iteration counter. Flow (FlowProblem) overrides this with a
+     * more sophisticated implementation that properly handles NLDD local solves.
+     *
+     * For non-Flow problems, this returns a context where:
+     * - globalIteration reflects numIterations() from the Newton method
+     * - isFirstGlobalIteration() returns true when numIterations() == 0
+     */
+    const NewtonIterationContext& iterationContext() const
+    {
+        // Thread-local to avoid data races
+        static thread_local NewtonIterationContext iterCtx;
+        iterCtx.globalIteration = model().newtonMethod().numIterations();
+        iterCtx.localIteration = 0;
+        iterCtx.inLocalSolve = false;
+        iterCtx.timestepInitialized = (iterCtx.globalIteration > 0);
+        return iterCtx;
+    }
 
 protected:
     Scalar nextTimeStepSize_;

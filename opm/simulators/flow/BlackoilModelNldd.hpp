@@ -237,26 +237,33 @@ public:
 
     //! \brief Do one non-linear NLDD iteration.
     template <class NonlinearSolverType>
-    SimulatorReportSingle nonlinearIterationNldd(const int iteration,
-                                                 const SimulatorTimerInterface& timer,
+    SimulatorReportSingle nonlinearIterationNldd(const SimulatorTimerInterface& timer,
                                                  NonlinearSolverType& nonlinear_solver)
     {
         // -----------   Set up reports and timer   -----------
         SimulatorReportSingle report;
 
-        if (iteration < model_.param().nldd_num_initial_newton_iter_) {
-            report = model_.nonlinearIterationNewton(iteration,
-                                                     timer,
-                                                     nonlinear_solver);
+        // If nldd_num_initial_newton_iter_ > 0, run global Newton iterations first.
+        // TODO: Investigate whether wells and other subsystems are correctly initialized
+        //
+        // When nldd_num_initial_newton_iter_ == 0, NLDD starts immediately but wells are still
+        // properly initialized via NewtonIterationContext::needsTimestepInit() which
+        // ensures prepareTimeStep() is called during the initial global linearization.
+        if (model_.iterationContext().globalIteration < model_.param().nldd_num_initial_newton_iter_) {
+            report = model_.nonlinearIterationNewton(timer, nonlinear_solver);
             return report;
         }
 
-        model_.initialLinearization(report, iteration, model_.param().newton_min_iter_,
+        model_.initialLinearization(report, model_.param().newton_min_iter_,
                                     model_.param().newton_max_iter_, timer);
 
         if (report.converged) {
             return report;
         }
+
+        // Remove the initial check entry; the final Newton step will
+        // record its own, keeping one entry per outer iteration.
+        model_.popLastConvergenceReport();
 
         // -----------   If not converged, do an NLDD iteration   -----------
         Dune::Timer localSolveTimer;
@@ -282,7 +289,7 @@ public:
             detailTimer.reset();
             detailTimer.start();
 
-            domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain, iteration);
+            domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain);
 
             updateMobilities(domain);
 
@@ -295,12 +302,12 @@ public:
             switch (model_.param().local_solve_approach_) {
             case DomainSolveApproach::Jacobi:
                 solveDomainJacobi(solution, locally_solved, local_report, logger,
-                                  iteration, timer, domain);
+                                  timer, domain);
                 break;
             default:
             case DomainSolveApproach::GaussSeidel:
                 solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
-                                       iteration, timer, domain);
+                                       timer, domain);
                 break;
             }
             // This should have updated the global matrix to be
@@ -408,12 +415,8 @@ public:
         local_reports_accumulated_.success.total_time += total_local_solve_time;
         local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
 
-        // Finish with a Newton step.
-        // Note that the "iteration + 100" is a simple way to avoid entering
-        // "if (iteration == 0)" and similar blocks, and also makes it a little
-        // easier to spot the iteration residuals in the DBG file. A more sophisticated
-        // approach can be done later.
-        auto rep = model_.nonlinearIterationNewton(iteration + 100, timer, nonlinear_solver);
+        // Finish with a global Newton step.
+        auto rep = model_.nonlinearIterationNewton(timer, nonlinear_solver);
         report += rep;
         if (rep.converged) {
             report.converged = true;
@@ -483,26 +486,24 @@ private:
                 const SimulatorTimerInterface& timer,
                 SimulatorReportSingle& local_report,
                 DeferredLogger& logger,
-                [[maybe_unused]] const int global_iteration,
                 const bool initial_assembly_required)
     {
         auto& modelSimulator = model_.simulator();
         Dune::Timer detailTimer;
 
-        modelSimulator.model().newtonMethod().setIterationIndex(0);
+        // RAII guard: local iteration context for this domain, restored on scope exit.
+        LocalContextGuard localCtxGuard(modelSimulator.problem(), model_.iterationContext());
+        auto& localCtx = localCtxGuard.context();
 
         // When called, if assembly has already been performed
         // with the initial values, we only need to check
         // for local convergence. Otherwise, we must do a local
         // assembly.
-        int iter = 0;
         if (initial_assembly_required) {
             detailTimer.start();
-            modelSimulator.model().newtonMethod().setIterationIndex(iter);
             // TODO: we should have a beginIterationLocal function()
             // only handling the well model for now
-            wellModel_.assemble(modelSimulator.model().newtonMethod().numIterations(),
-                                modelSimulator.timeStepSize(),
+            wellModel_.assemble(modelSimulator.timeStepSize(),
                                 domain);
             const double tt0 = detailTimer.stop();
             local_report.assemble_time += tt0;
@@ -517,7 +518,7 @@ private:
         detailTimer.reset();
         detailTimer.start();
         std::vector<Scalar> resnorms;
-        auto convreport = this->getDomainConvergence(domain, timer, 0, logger, resnorms);
+        auto convreport = this->getDomainConvergence(domain, timer, logger, resnorms);
         local_report.update_time += detailTimer.stop();
         if (convreport.converged()) {
             // TODO: set more info, timing etc.
@@ -565,8 +566,8 @@ private:
                 local_report.total_linear_iterations = domain_linsolvers_[domain.index].iterations();
                 modelSimulator.problem().endIteration();
                 local_report.converged = false;
-                local_report.total_newton_iterations = iter;
-                local_report.total_linearizations += iter;
+                local_report.total_newton_iterations = localCtx.localIteration;
+                local_report.total_linearizations += localCtx.localIteration;
                 return convreport;
             }
             model_.wellModel().postSolveDomain(x, domain);
@@ -586,13 +587,11 @@ private:
             // Assemble well and reservoir.
             detailTimer.reset();
             detailTimer.start();
-            ++iter;
-            modelSimulator.model().newtonMethod().setIterationIndex(iter);
+            localCtx.advanceLocalIteration();
             // TODO: we should have a beginIterationLocal function()
             // only handling the well model for now
             // Assemble reservoir locally.
-            wellModel_.assemble(modelSimulator.model().newtonMethod().numIterations(),
-                                modelSimulator.timeStepSize(),
+            wellModel_.assemble(modelSimulator.timeStepSize(),
                                 domain);
             const double tt3 = detailTimer.stop();
             local_report.assemble_time += tt3;
@@ -606,7 +605,7 @@ private:
             detailTimer.reset();
             detailTimer.start();
             resnorms.clear();
-            convreport = this->getDomainConvergence(domain, timer, iter, logger, resnorms);
+            convreport = this->getDomainConvergence(domain, timer, logger, resnorms);
             convergence_history.push_back(resnorms);
             local_report.update_time += detailTimer.stop();
 
@@ -626,20 +625,20 @@ private:
                 bool oscillate = false;
                 bool stagnate = false;
                 const auto num_residuals = convergence_history.front().size();
-                detail::detectOscillations(convergence_history, iter, num_residuals,
+                detail::detectOscillations(convergence_history, localCtx.localIteration, num_residuals,
                                            Scalar{0.2}, 1, oscillate, stagnate);
                 if (oscillate) {
                     damping_factor *= 0.85;
                     logger.debug(fmt::format("| Damping factor is now {}", damping_factor));
                 }
             }
-        } while (!convreport.converged() && iter <= max_iter);
+        } while (!convreport.converged() && localCtx.localIteration <= max_iter);
 
         modelSimulator.problem().endIteration();
 
         local_report.converged = convreport.converged();
-        local_report.total_newton_iterations = iter;
-        local_report.total_linearizations += iter;
+        local_report.total_newton_iterations = localCtx.localIteration;
+        local_report.total_linearizations += localCtx.localIteration;
         // TODO: set more info, timing etc.
         return convreport;
     }
@@ -766,12 +765,14 @@ private:
 
     ConvergenceReport getDomainReservoirConvergence(const double reportTime,
                                                     const double dt,
-                                                    const int iteration,
                                                     const Domain& domain,
                                                     DeferredLogger& logger,
                                                     std::vector<Scalar>& B_avg,
                                                     std::vector<Scalar>& residual_norms)
     {
+        const auto& iterCtx = model_.simulator().problem().iterationContext();
+        const int maxLocalIter = model_.param().max_local_solve_iterations_;
+
         using Vector = std::vector<Scalar>;
 
         const int numComp = numEq;
@@ -784,20 +785,51 @@ private:
         auto cnvErrorPvFraction = computeCnvErrorPvLocal(domain, B_avg, dt);
         cnvErrorPvFraction /= (pvSum - numAquiferPvSum);
 
-        // Default value of relaxed_max_pv_fraction_ is 0.03 and min_strict_cnv_iter_ is 0.
-        // For each iteration, we need to determine whether to use the relaxed CNV tolerance.
-        // To disable the usage of relaxed CNV tolerance, you can set the relaxed_max_pv_fraction_ to be 0.
-        const bool use_relaxed_cnv = cnvErrorPvFraction < model_.param().relaxed_max_pv_fraction_ &&
-                                 iteration >= model_.param().min_strict_cnv_iter_;
+        // For each iteration, we need to determine whether to use the relaxed tolerances.
+        // To disable the usage of relaxed tolerances, you can set the relaxed tolerances
+        // equal to the strict tolerances.
+        //
+        // If min_strict_mb_iter_ = -1 (default) we use a relaxed tolerance for the mass
+        // balance only on the last local iteration. For non-negative values we use the
+        // relaxed tolerance after the given number of iterations.
+        const bool relax_final_iteration_mb =
+            model_.param().min_strict_mb_iter_ < 0 && iterCtx.localIteration == maxLocalIter;
+
+        const bool relax_iter_mb =
+            model_.param().min_strict_mb_iter_ >= 0 &&
+            iterCtx.localIteration >= model_.param().min_strict_mb_iter_;
+
+        const bool use_relaxed_mb = relax_final_iteration_mb || relax_iter_mb;
+
+        const Scalar tol_mb = model_.param().local_tolerance_scaling_mb_
+            * (use_relaxed_mb ? model_.param().tolerance_mb_relaxed_ : model_.param().tolerance_mb_);
+
+        // If min_strict_cnv_iter_ = -1 (default) we use a relaxed tolerance for the CNV
+        // only on the last local iteration. For non-negative values we use the relaxed
+        // tolerance after the given number of iterations. We also use relaxed tolerances
+        // for cells with total pore-volume less than relaxed_max_pv_fraction_.
+        const bool relax_final_iteration_cnv =
+            model_.param().min_strict_cnv_iter_ < 0 && iterCtx.localIteration == maxLocalIter;
+
+        const bool relax_iter_cnv =
+            model_.param().min_strict_cnv_iter_ >= 0 &&
+            iterCtx.localIteration >= model_.param().min_strict_cnv_iter_;
+
+        const bool relax_pv_fraction_cnv =
+            cnvErrorPvFraction < model_.param().relaxed_max_pv_fraction_;
+
+        const bool use_relaxed_cnv = relax_final_iteration_cnv ||
+                                     relax_iter_cnv ||
+                                     relax_pv_fraction_cnv;
+
         // Tighter bound for local convergence should increase the
         // likelyhood of: local convergence => global convergence
         const Scalar tol_cnv = model_.param().local_tolerance_scaling_cnv_
             * (use_relaxed_cnv ? model_.param().tolerance_cnv_relaxed_
                            : model_.param().tolerance_cnv_);
 
-        const bool use_relaxed_mb = iteration >= model_.param().min_strict_mb_iter_;
-        const Scalar tol_mb  = model_.param().local_tolerance_scaling_mb_
-            * (use_relaxed_mb ? model_.param().tolerance_mb_relaxed_ : model_.param().tolerance_mb_);
+        // TODO: Energy-specific tolerances are not currently applied. A closer analysis
+        // is needed to determine if everything in NLDD is compatible with thermal simulations.
 
         // Finish computation
         std::vector<Scalar> CNV(numComp);
@@ -836,9 +868,9 @@ private:
         }
 
         // Output of residuals. If converged at initial state, log nothing.
-        const bool converged_at_initial_state = (report.converged() && iteration == 0);
+        const bool converged_at_initial_state = (report.converged() && iterCtx.localIteration == 0);
         if (!converged_at_initial_state) {
-            if (iteration == 0) {
+            if (iterCtx.localIteration == 0) {
                 // Log header.
                 std::string msg = fmt::format("Domain {} on rank {}, size {}, containing cell {}\n| Iter",
                                               domain.index, this->rank_, domain.cells.size(), domain.cells[0]);
@@ -859,7 +891,7 @@ private:
             ss << "| ";
             const std::streamsize oprec = ss.precision(3);
             const std::ios::fmtflags oflags = ss.setf(std::ios::scientific);
-            ss << std::setw(4) << iteration;
+            ss << std::setw(4) << iterCtx.localIteration;
             for (int compIdx = 0; compIdx < numComp; ++compIdx) {
                 ss << std::setw(11) << mass_balance_residual[compIdx];
             }
@@ -876,7 +908,6 @@ private:
 
     ConvergenceReport getDomainConvergence(const Domain& domain,
                                            const SimulatorTimerInterface& timer,
-                                           const int iteration,
                                            DeferredLogger& logger,
                                            std::vector<Scalar>& residual_norms)
     {
@@ -884,7 +915,6 @@ private:
         std::vector<Scalar> B_avg(numEq, 0.0);
         auto report = this->getDomainReservoirConvergence(timer.simulationTimeElapsed(),
                                                           timer.currentStepLength(),
-                                                          iteration,
                                                           domain,
                                                           logger,
                                                           B_avg,
@@ -963,13 +993,12 @@ private:
                            GlobalEqVector& locally_solved,
                            SimulatorReportSingle& local_report,
                            DeferredLogger& logger,
-                           const int iteration,
                            const SimulatorTimerInterface& timer,
                            const Domain& domain)
     {
         auto initial_local_well_primary_vars = wellModel_.getPrimaryVarsDomain(domain.index);
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
-        auto convrep = solveDomain(domain, timer, local_report, logger, iteration, false);
+        auto convrep = solveDomain(domain, timer, local_report, logger, false);
         if (local_report.converged) {
             auto local_solution = Details::extractVector(solution, domain.cells);
             Details::setGlobal(local_solution, domain.cells, locally_solved);
@@ -987,13 +1016,12 @@ private:
                                 GlobalEqVector& locally_solved,
                                 SimulatorReportSingle& local_report,
                                 DeferredLogger& logger,
-                                const int iteration,
                                 const SimulatorTimerInterface& timer,
                                 const Domain& domain)
     {
         auto initial_local_well_primary_vars = wellModel_.getPrimaryVarsDomain(domain.index);
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
-        auto convrep = solveDomain(domain, timer, local_report, logger, iteration, true);
+        auto convrep = solveDomain(domain, timer, local_report, logger, true);
         if (!local_report.converged) {
             // We look at the detailed convergence report to evaluate
             // if we should accept the unconverged solution.
@@ -1136,7 +1164,7 @@ private:
         }
     }
 
-    bool checkIfSubdomainNeedsSolving(const Domain& domain, const int iteration)
+    bool checkIfSubdomainNeedsSolving(const Domain& domain)
     {
         if (domain.skip) {
             return false;
@@ -1153,8 +1181,8 @@ private:
             return true;
         }
 
-        // Skip mobility check on first iteration
-        if (iteration == 0) {
+        // Skip mobility check on first global iteration (no previous mobilities to compare)
+        if (model_.iterationContext().isFirstGlobalIteration()) {
             return true;
         }
 

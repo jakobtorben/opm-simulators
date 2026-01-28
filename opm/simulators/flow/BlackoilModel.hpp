@@ -30,6 +30,7 @@
 #include <opm/simulators/flow/BlackoilModelNldd.hpp>
 #include <opm/simulators/flow/BlackoilModelProperties.hpp>
 #include <opm/simulators/flow/FlowProblemBlackoilProperties.hpp>
+#include <opm/simulators/flow/NewtonIterationContext.hpp>
 #include <opm/simulators/flow/RSTConv.hpp>
 
 #include <opm/simulators/linalg/ISTLSolver.hpp>
@@ -155,7 +156,6 @@ public:
     SimulatorReportSingle prepareStep(const SimulatorTimerInterface& timer);
 
     void initialLinearization(SimulatorReportSingle& report,
-                              const int iteration,
                               const int minIter,
                               const int maxIter,
                               const SimulatorTimerInterface& timer);
@@ -164,22 +164,19 @@ public:
     /// This model will perform a Newton-Raphson update, changing reservoir_state
     /// and well_state. It will also use the nonlinear_solver to do relaxation of
     /// updates if necessary.
-    /// \param[in] iteration              should be 0 for the first call of a new timestep
+    /// The method increases the counter in iterationContext at the end of the method.
     /// \param[in] timer                  simulation timer
     /// \param[in] nonlinear_solver       nonlinear solver used (for oscillation/relaxation control)
     template <class NonlinearSolverType>
-    SimulatorReportSingle nonlinearIteration(const int iteration,
-                                             const SimulatorTimerInterface& timer,
+    SimulatorReportSingle nonlinearIteration(const SimulatorTimerInterface& timer,
                                              NonlinearSolverType& nonlinear_solver);
 
     template <class NonlinearSolverType>
-    SimulatorReportSingle nonlinearIterationNewton(const int iteration,
-                                                   const SimulatorTimerInterface& timer,
+    SimulatorReportSingle nonlinearIterationNewton(const SimulatorTimerInterface& timer,
                                                    NonlinearSolverType& nonlinear_solver);
 
     /// Assemble the residual and Jacobian of the nonlinear system.
-    SimulatorReportSingle assembleReservoir(const SimulatorTimerInterface& /* timer */,
-                                            const int iterationIdx);
+    SimulatorReportSingle assembleReservoir(const SimulatorTimerInterface& timer);
 
     // compute the "relative" change of the solution between time steps
     Scalar relativeChange() const;
@@ -236,8 +233,7 @@ public:
     void convergencePerCell(const std::vector<Scalar>& B_avg,
                             const double dt,
                             const double tol_cnv,
-                            const double tol_cnv_energy,
-                            const int iteration);
+                            const double tol_cnv_energy);
 
     void updateTUNING(const Tuning& tuning);
     void updateTUNINGDP(const TuningDp& tuning_dp);
@@ -245,7 +241,6 @@ public:
     ConvergenceReport
     getReservoirConvergence(const double reportTime,
                             const double dt,
-                            const int iteration,
                             const int maxIter,
                             std::vector<Scalar>& B_avg,
                             std::vector<Scalar>& residual_norms);
@@ -253,12 +248,10 @@ public:
     /// Compute convergence based on total mass balance (tol_mb) and maximum
     /// residual mass balance (tol_cnv).
     /// \param[in]   timer       simulation timer
-    /// \param[in]   iteration   current iteration number
     /// \param[in]   maxIter     maximum number of iterations
     /// \param[out]  residual_norms   CNV residuals by phase
     ConvergenceReport
     getConvergence(const SimulatorTimerInterface& timer,
-                   const int iteration,
                    const int maxIter,
                    std::vector<Scalar>& residual_norms);
 
@@ -297,6 +290,13 @@ public:
 
     const std::vector<StepReport>& stepReports() const
     { return convergence_reports_; }
+
+    /// Remove the last convergence report entry and residual norms history entry.
+    void popLastConvergenceReport()
+    {
+        convergence_reports_.back().report.pop_back();
+        residual_norms_history_.pop_back();
+    }
 
     void writePartitions(const std::filesystem::path& odir) const;
 
@@ -338,6 +338,14 @@ public:
     bool hasNlddSolver() const
     { return nlddSolver_ != nullptr; }
 
+    //! \brief Returns the Newton iteration context (const)
+    const NewtonIterationContext& iterationContext() const
+    { return iterationContext_; }
+
+    //! \brief Returns the Newton iteration context (mutable)
+    NewtonIterationContext& iterationContext()
+    { return iterationContext_; }
+
 protected:
     // ---------  Data members  ---------
     Simulator& simulator_;
@@ -374,6 +382,7 @@ protected:
 
     std::unique_ptr<BlackoilModelNldd<TypeTag>> nlddSolver_; //!< Non-linear DD solver
     BlackoilModelConvergenceMonitor<Scalar> conv_monitor_;
+    NewtonIterationContext iterationContext_; //!< Context for iteration-dependent decisions
 
 private:
     Scalar dpMaxRel() const { return param_.dp_max_rel_; }

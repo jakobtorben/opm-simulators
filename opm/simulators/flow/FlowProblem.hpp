@@ -59,6 +59,7 @@
 #include <opm/simulators/flow/FlowGenericProblem.hpp>
 // TODO: maybe we can name it FlowProblemProperties.hpp
 #include <opm/simulators/flow/FlowBaseProblemProperties.hpp>
+#include <opm/simulators/flow/NewtonIterationContext.hpp>
 #include <opm/simulators/flow/FlowUtils.hpp>
 #include <opm/simulators/flow/TracerModel.hpp>
 #include <opm/simulators/flow/TemperatureModel.hpp>
@@ -1038,6 +1039,26 @@ public:
     WellModel& wellModel()
     { return wellModel_; }
 
+    /*!
+     * \brief Sets the Newton iteration context for the current solve.
+     *
+     * This is called by BlackoilModel before beginIteration() to provide
+     * iteration state information to sub-models (well model, etc).
+     */
+    void setIterationContext(const NewtonIterationContext& context)
+    { iterationContext_ = &context; }
+
+    /*!
+     * \brief Returns the current Newton iteration context.
+     *
+     * Must be called only when context has been set (during iteration).
+     */
+    const NewtonIterationContext& iterationContext() const
+    {
+        assert(iterationContext_ && "Iteration context not set - called outside of iteration?");
+        return *iterationContext_;
+    }
+
     const AquiferModel& aquiferModel() const
     { return aquiferModel_; }
 
@@ -1735,6 +1756,7 @@ protected:
 
     WellModel wellModel_;
     AquiferModel aquiferModel_;
+    const NewtonIterationContext* iterationContext_ = nullptr; //!< Context for iteration-dependent decisions (set by BlackoilModel)
 
     PffGridVector<GridView, Stencil, PffDofData_, DofMapper> pffDofData_;
     TracerModel tracerModel_;
