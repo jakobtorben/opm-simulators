@@ -1413,6 +1413,12 @@ if(AMGX_FOUND)
   )
 endif()
 
+if(Draugr_FOUND)
+  list(APPEND PUBLIC_HEADER_FILES
+    opm/simulators/linalg/DraugrAMGPreconditioner.hpp
+  )
+endif()
+
 if (CONVERT_CUDA_TO_HIP)
   add_custom_target(hipified_headers  DEPENDS ${PUBLIC_HEADER_FILES_HIPIFIED})
 endif()

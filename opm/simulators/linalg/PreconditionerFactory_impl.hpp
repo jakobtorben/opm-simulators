@@ -58,6 +58,10 @@
 #include <opm/simulators/linalg/AmgxPreconditioner.hpp>
 #endif
 
+#if HAVE_DRAUGR
+#include <opm/simulators/linalg/DraugrAMGPreconditioner.hpp>
+#endif
+
 #include <cassert>
 
 #include <opm/simulators/linalg/StandardPreconditioners.hpp>

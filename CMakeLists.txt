@@ -31,6 +31,7 @@ option(USE_GPU_BRIDGE "Enable the GPU bridge (GPU/AMGCL solvers)" ON)
 option(CONVERT_CUDA_TO_HIP "Convert CUDA code to HIP (to run on AMD cards)" OFF)
 option(USE_AMGX "Enable AMGX support?" OFF)
 option(USE_HYPRE "Use the Hypre library for linear solvers?" OFF)
+option(USE_DRAUGR "Use the Draugr.jl library for AMG preconditioner?" OFF)
 set(OPM_COMPILE_COMPONENTS "2;3;4;5;6;7" CACHE STRING "The components to compile support for")
 option(USE_OPENCL "Enable OpenCL support?" ON)
 
@@ -209,6 +210,14 @@ macro(opm-simulators_prereqs_hook)
     set(HYPRE_FOUND OFF)
   endif()
 
+  if(USE_DRAUGR)
+    find_package(Draugr)
+    if(NOT Draugr_FOUND)
+      message(WARNING "Draugr requested but not found. Continuing without Draugr support.")
+      set(USE_DRAUGR OFF)
+    endif()
+  endif()
+
   if(USE_OPENCL AND USE_GPU_BRIDGE)
     find_package(OpenCL)
 
@@ -268,6 +277,10 @@ macro(opm-simulators_sources_hook)
   if(AMGX_FOUND)
     list(APPEND tests_SOURCES tests/gpuistl/test_AmgxInterface.cpp)
     list(APPEND tests_SOURCES tests/test_AmgxPreconditioner.cpp)
+  endif()
+
+  if(Draugr_FOUND)
+    list(APPEND tests_SOURCES tests/test_DraugrAMGPreconditioner.cpp)
   endif()
 
   if(HAVE_AVX2_EXTENSION)
@@ -344,6 +357,10 @@ macro(opm-simulators_config_hook)
 
   if(HYPRE_FOUND)
     set(HAVE_HYPRE 1)
+  endif()
+
+  if(Draugr_FOUND)
+    set(HAVE_DRAUGR 1)
   endif()
 
   if(OpenCL_FOUND)
@@ -597,6 +614,10 @@ macro(opm-simulators_targets_hook)
 
   if(HYPRE_FOUND)
     target_link_libraries(opmsimulators PUBLIC HYPRE::HYPRE)
+  endif()
+
+  if(Draugr_FOUND)
+    target_link_libraries(opmsimulators PUBLIC Draugr::Draugr)
   endif()
 
   if(OpenCL_FOUND)

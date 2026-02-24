@@ -206,6 +206,17 @@ struct StandardPreconditioners<Operator, Dune::Amg::SequentialInformation, typen
                 });
             }
 #endif
+
+#if HAVE_DRAUGR
+            // Only add Draugr AMG for scalar double matrices
+            if constexpr (M::block_type::rows == 1 && M::block_type::cols == 1 &&
+                          std::is_same_v<double, typename V::field_type>) {
+                F::addCreator("draugr", [](const O& op, const P& prm, const std::function<V()>&, std::size_t) {
+                    return std::make_shared<Opm::Draugr::DraugrAMGPreconditioner<M, V, V, Dune::Amg::SequentialInformation>>(
+                        op.getmat(), prm, Dune::Amg::SequentialInformation());
+                });
+            }
+#endif
         }
 
         // Add CPRW only for the WellModelMatrixAdapter, as the method requires that the operator
