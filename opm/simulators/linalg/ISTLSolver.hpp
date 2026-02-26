@@ -39,12 +39,14 @@
 #include <opm/simulators/flow/BlackoilModelParameters.hpp>
 #include <opm/simulators/flow/FlowBaseVanguard.hpp>
 #include <opm/simulators/flow/FlowBaseProblemProperties.hpp>
+#include <opm/simulators/flow/SubDomain.hpp>
 #include <opm/simulators/linalg/ExtractParallelGridInformationToISTL.hpp>
 #include <opm/simulators/linalg/FlowLinearSolverParameters.hpp>
 #include <opm/simulators/linalg/matrixblock.hh>
 #include <opm/simulators/linalg/istlsparsematrixadapter.hh>
 #include <opm/simulators/linalg/PreconditionerWithUpdate.hpp>
 #include <opm/simulators/linalg/WellOperators.hpp>
+#include <opm/simulators/utils/ParallelCommunication.hpp>
 #include <opm/simulators/linalg/WriteSystemMatrixHelper.hpp>
 #include <opm/simulators/linalg/findOverlapRowsAndColumns.hpp>
 #include <opm/simulators/linalg/getQuasiImpesWeights.hpp>
@@ -52,6 +54,7 @@
 #include <opm/simulators/linalg/AbstractISTLSolver.hpp>
 #include <opm/simulators/linalg/printlinearsolverparameter.hpp>
 
+#include <algorithm>
 #include <any>
 #include <cstddef>
 #include <functional>
@@ -163,7 +166,10 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         using AbstractPreconditionerType = Dune::PreconditionerWithUpdate<Vector, Vector>;
         using WellModelOperator = WellModelAsLinearOperator<WellModel, Vector, Vector>;
         using ElementMapper = GetPropType<TypeTag, Properties::ElementMapper>;
+        using Grid = GetPropType<TypeTag, Properties::Grid>;
         using ElementChunksType = ElementChunks<GridView, Dune::Partitions::All>;
+        using Domain = SubDomain<Grid>;
+        using DomainElementChunksType = ElementChunks<decltype(Domain::view), Dune::Partitions::Interior>;
 
         constexpr static std::size_t pressureIndex = GetPropType<TypeTag, Properties::Indices>::pressureSwitchIdx;
 
@@ -447,9 +453,11 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
 
         const CommunicationType* comm() const override { return comm_.get(); }
 
-        void setDomainIndex(const int index)
+        void setDomain(const Domain& domain)
         {
-            domainIndex_ = index;
+            domain_ = &domain;
+            domainElementChunks_ = std::make_unique<DomainElementChunksType>(
+                domain.view, Dune::Partitions::interior, ThreadManager::maxThreads());
         }
 
         bool isNlddLocalSolver() const
@@ -482,7 +490,7 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                 if (!useWellConn_) {
                     if (isNlddLocalSolver()) {
                         auto wellOp = std::make_unique<DomainWellModelAsLinearOperator<WellModel, Vector, Vector>>(simulator_.problem().wellModel());
-                        wellOp->setDomainIndex(domainIndex_);
+                        wellOp->setDomainIndex(domain_->index);
                         flexibleSolver_[activeSolverNum_].wellOperator_ = std::move(wellOp);
                     }
                     else {
@@ -595,30 +603,52 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
                     weightsCalculator =
                         [this, pressIndex, enableThreadParallel]
                         {
-                            Vector weights(rhs_->size());
                             ElementContext elemCtx(simulator_);
-                            Amg::getTrueImpesWeights(pressIndex,
-                                                     weights,
-                                                     elemCtx,
-                                                     simulator_.model(),
-                                                     *element_chunks_,
-                                                     enableThreadParallel
-                            );
+                            if (domain_) {
+                                Vector weights(domain_->cells.size());
+                                const auto& cells = domain_->cells;
+                                auto g2l = [&cells](auto idx) {
+                                    return static_cast<int>(
+                                        std::lower_bound(cells.begin(), cells.end(), idx)
+                                        - cells.begin());
+                                };
+                                Parallel::Communication localComm(Dune::MPIHelper::getLocalCommunicator());
+                                Amg::getTrueImpesWeights(pressIndex, weights, elemCtx,
+                                    simulator_.model(), *domainElementChunks_,
+                                    enableThreadParallel, localComm, g2l);
+                                return weights;
+                            }
+                            Vector weights(rhs_->size());
+                            Amg::getTrueImpesWeights(pressIndex, weights, elemCtx,
+                                simulator_.model(), *element_chunks_,
+                                enableThreadParallel,
+                                simulator_.vanguard().grid().comm());
                             return weights;
                         };
                 } else if  (weightsType == "trueimpesanalytic" ) {
                     weightsCalculator =
                         [this, pressIndex, enableThreadParallel]
                         {
-                            Vector weights(rhs_->size());
                             ElementContext elemCtx(simulator_);
-                            Amg::getTrueImpesWeightsAnalytic(pressIndex,
-                                                             weights,
-                                                             elemCtx,
-                                                             simulator_.model(),
-                                                             *element_chunks_,
-                                                             enableThreadParallel
-                            );
+                            if (domain_) {
+                                Vector weights(domain_->cells.size());
+                                const auto& cells = domain_->cells;
+                                auto g2l = [&cells](auto idx) {
+                                    return static_cast<int>(
+                                        std::lower_bound(cells.begin(), cells.end(), idx)
+                                        - cells.begin());
+                                };
+                                Parallel::Communication localComm(Dune::MPIHelper::getLocalCommunicator());
+                                Amg::getTrueImpesWeightsAnalytic(pressIndex, weights, elemCtx,
+                                    simulator_.model(), *domainElementChunks_,
+                                    enableThreadParallel, localComm, g2l);
+                                return weights;
+                            }
+                            Vector weights(rhs_->size());
+                            Amg::getTrueImpesWeightsAnalytic(pressIndex, weights, elemCtx,
+                                simulator_.model(), *element_chunks_,
+                                enableThreadParallel,
+                                simulator_.vanguard().grid().comm());
                             return weights;
                         };
                 } else {
@@ -656,7 +686,8 @@ std::unique_ptr<Matrix> blockJacobiAdjacency(const Grid& grid,
         std::vector<int> overlapRows_;
         std::vector<int> interiorRows_;
 
-        int domainIndex_ = -1;
+        const Domain* domain_ = nullptr;
+        std::unique_ptr<DomainElementChunksType> domainElementChunks_;
 
         bool useWellConn_;
 

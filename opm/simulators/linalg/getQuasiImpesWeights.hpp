@@ -28,6 +28,7 @@
 #include <opm/models/parallel/threadmanager.hpp>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 #if HAVE_CUDA
 #if USE_HIP
@@ -157,12 +158,16 @@ namespace Amg
     }
 #endif
 
-    template<class Vector, class ElementContext, class Model, class ElementChunksType>
+    template<class Vector, class ElementContext, class Model,
+             class ElementChunksType, class Comm,
+             class IndexMapper = std::identity>
     void getTrueImpesWeights(int pressureVarIndex, Vector& weights,
                              const ElementContext& elemCtx,
                              const Model& model,
                              const ElementChunksType& element_chunks,
-                             [[maybe_unused]] bool enable_thread_parallel)
+                             [[maybe_unused]] bool enable_thread_parallel,
+                             const Comm& comm,
+                             IndexMapper indexMapper = {})
     {
         using VectorBlockType = typename Vector::block_type;
         using Matrix = typename std::decay_t<decltype(model.linearizer().jacobian())>;
@@ -217,20 +222,24 @@ namespace Amg
                 // probably a scaling which could give approximately total compressibility would be better
                 bweights /=  std::fabs(abs_max); // given normal densities this scales weights to about 1.
 
-                const auto index = localElemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
-                weights[index] = bweights;
+                const auto globalIndex = localElemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
+                weights[indexMapper(globalIndex)] = bweights;
             }
         }
-        OPM_END_PARALLEL_TRY_CATCH("getTrueImpesWeights() failed: ", elemCtx.simulator().vanguard().grid().comm());
+        OPM_END_PARALLEL_TRY_CATCH("getTrueImpesWeights() failed: ", comm);
     }
 
-    template <class Vector, class ElementContext, class Model, class ElementChunksType>
+    template <class Vector, class ElementContext, class Model,
+              class ElementChunksType, class Comm,
+              class IndexMapper = std::identity>
     void getTrueImpesWeightsAnalytic(int /*pressureVarIndex*/,
                                      Vector& weights,
                                      const ElementContext& elemCtx,
                                      const Model& model,
                                      const ElementChunksType& element_chunks,
-                                     [[maybe_unused]] bool enable_thread_parallel)
+                                     [[maybe_unused]] bool enable_thread_parallel,
+                                     const Comm& comm,
+                                     IndexMapper indexMapper = {})
     {
         // The sequential residual is a linear combination of the
         // mass balance residuals, with coefficients equal to (for
@@ -266,7 +275,7 @@ namespace Amg
                 localElemCtx.updatePrimaryStencil(elem);
                 localElemCtx.updatePrimaryIntensiveQuantities(/*timeIdx=*/0);
 
-                const auto index = localElemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
+                const auto globalIndex = localElemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
                 const auto& intQuants = localElemCtx.intensiveQuantities(/*spaceIdx=*/0, /*timeIdx=*/0);
                 const auto& fs = intQuants.fluidState();
 
@@ -280,7 +289,7 @@ namespace Amg
                 double denominator = 1.0;
                 double rs = Toolbox::template decay<double>(fs.Rs());
                 double rv = Toolbox::template decay<double>(fs.Rv());
-                const auto& priVars = solution[index];
+                const auto& priVars = solution[globalIndex];
                 if (priVars.primaryVarsMeaningGas() == PrimaryVariables::GasMeaning::Rv) {
                     rs = 0.0;
                 }
@@ -307,10 +316,10 @@ namespace Amg
                         / denominator);
                 }
 
-                weights[index] = bweights;
+                weights[indexMapper(globalIndex)] = bweights;
             }
         }
-        OPM_END_PARALLEL_TRY_CATCH("getTrueImpesAnalyticWeights() failed: ", elemCtx.simulator().vanguard().grid().comm());
+        OPM_END_PARALLEL_TRY_CATCH("getTrueImpesAnalyticWeights() failed: ", comm);
     }
 } // namespace Amg
 

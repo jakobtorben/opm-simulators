@@ -384,7 +384,8 @@ private:
                                              m_cpuWeights,
                                              elemCtx, m_simulator.model(),
                                              m_element_chunks,
-                                             enableThreadParallel);
+                                             enableThreadParallel,
+                                             m_simulator.vanguard().grid().comm());
 
                     // Copy CPU vector to GPU vector using main stream and asynchronous transfer
                     m_weights->copyFromHostAsync(m_cpuWeights);
@@ -405,7 +406,8 @@ private:
                                                      m_cpuWeights,
                                                      elemCtx, m_simulator.model(),
                                                      m_element_chunks,
-                                                     enableThreadParallel);
+                                                     enableThreadParallel,
+                                                     m_simulator.vanguard().grid().comm());
 
                     // Copy CPU vector to GPU vector using main stream and asynchronous transfer
                     m_weights->copyFromHostAsync(m_cpuWeights);
