@@ -36,6 +36,12 @@ namespace Opm
         GaussSeidel
     };
 
+    //! \brief How Gauss-Seidel treats overlap-cell updates after a successful local solve.
+    enum class GaussSeidelOverlapWriteback {
+        Restricted,
+        Unrestricted
+    };
+
     //! \brief Measure to use for domain ordering.
     enum class DomainOrderingMeasure {
         AveragePressure,
@@ -53,6 +59,17 @@ namespace Opm
             return DomainOrderingMeasure::AveragePressure;
         } else {
             throw std::runtime_error(fmt::format(fmt::runtime("Invalid domain ordering '{}' specified"), measure));
+        }
+    }
+
+    inline GaussSeidelOverlapWriteback gaussSeidelOverlapWritebackFromString(const std::string_view mode)
+    {
+        if (mode == "restricted") {
+            return GaussSeidelOverlapWriteback::Restricted;
+        } else if (mode == "unrestricted") {
+            return GaussSeidelOverlapWriteback::Unrestricted;
+        } else {
+            throw std::runtime_error(fmt::format(fmt::runtime("Invalid Gauss-Seidel overlap writeback '{}' specified"), mode));
         }
     }
 

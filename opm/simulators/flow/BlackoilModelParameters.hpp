@@ -167,6 +167,7 @@ struct NlddNumInitialNewtonIter { static constexpr int value = 1; };
 template<class Scalar>
 struct NlddRelativeMobilityChangeTol { static constexpr Scalar value = 0.1; };
 struct NlddNumOverlapLayers { static constexpr int value = 0; };
+struct NlddGaussSeidelOverlapWriteback { static constexpr auto value = "unrestricted"; };
 struct NumLocalDomains { static constexpr int value = 0; };
 
 template<class Scalar>
@@ -377,6 +378,9 @@ public:
     Scalar nldd_relative_mobility_change_tol_;
     /// Number of overlap cell layers for NLDD domain solves (0 = no overlap)
     int nldd_num_overlap_layers_{0};
+    /// How Gauss-Seidel should treat overlap-cell values after a successful local solve.
+    /// The default unrestricted mode keeps overlap updates visible during the sweep.
+    GaussSeidelOverlapWriteback nldd_gs_overlap_writeback_{GaussSeidelOverlapWriteback::Unrestricted};
     int num_local_domains_{0};
     Scalar local_domains_partition_imbalance_{1.03};
     std::string local_domains_partition_method_;

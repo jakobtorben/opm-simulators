@@ -72,6 +72,7 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -172,8 +173,10 @@ public:
                 interior[ix] = true;
             }
 
-            // Compute overlap cells (face-neighbors of interior cells
-            // that belong to other domains on this rank).
+            // Compute overlap cells by expanding the domain with local
+            // face-neighbors layer by layer. Restrict the expansion to
+            // cells owned on this rank so the overlap remains consistent
+            // with the local partition vector and interior flags.
             // Also collect entity seeds for the overlap cells so we can
             // construct the SubGridPart with a consistent view.
             std::vector<int> overlap_cells;
@@ -181,25 +184,48 @@ public:
             if (use_overlap) {
                 const auto& leafView = grid.leafGridView();
                 const auto& iset = leafView.indexSet();
+                const int num_layers = model_.param().nldd_num_overlap_layers_;
+                std::unordered_set<int> in_domain(partitions[index].begin(),
+                                                  partitions[index].end());
+                std::vector<EntitySeed> frontier_seeds(seeds[index].begin(),
+                                                       seeds[index].end());
                 std::map<int, EntitySeed> overlap_map;
-                for (std::size_t s = 0; s < seeds[index].size(); ++s) {
-                    const auto entity = grid.entity(seeds[index][s]);
-                    for (auto isect = leafView.ibegin(entity);
-                         isect != leafView.iend(entity); ++isect) {
-                        if (isect->boundary() || !isect->neighbor()) {
-                            continue;
-                        }
-                        const auto outside = isect->outside();
-                        if (outside.partitionType() != Dune::InteriorEntity) {
-                            continue;
-                        }
-                        const int nb_idx = iset.index(outside);
-                        if (nb_idx < static_cast<int>(interior.size())
-                            && !interior[nb_idx]) {
-                            overlap_map.try_emplace(nb_idx, outside.seed());
+
+                for (int layer = 0; layer < num_layers; ++layer) {
+                    std::vector<EntitySeed> next_frontier;
+                    for (const auto& seed : frontier_seeds) {
+                        const auto entity = grid.entity(seed);
+                        for (auto isect = leafView.ibegin(entity);
+                             isect != leafView.iend(entity); ++isect) {
+                            if (isect->boundary() || !isect->neighbor()) {
+                                continue;
+                            }
+
+                            const auto outside = isect->outside();
+                            if (outside.partitionType() != Dune::InteriorEntity) {
+                                continue;
+                            }
+
+                            const int nb_idx = iset.index(outside);
+                            if (nb_idx >= static_cast<int>(interior.size())
+                                || in_domain.count(nb_idx) != 0) {
+                                continue;
+                            }
+
+                            auto [it, inserted] = overlap_map.try_emplace(nb_idx, outside.seed());
+                            if (inserted) {
+                                in_domain.insert(nb_idx);
+                                next_frontier.push_back(outside.seed());
+                            }
                         }
                     }
+
+                    frontier_seeds = std::move(next_frontier);
+                    if (frontier_seeds.empty()) {
+                        break;
+                    }
                 }
+
                 overlap_cells.reserve(overlap_map.size());
                 overlap_seeds.reserve(overlap_map.size());
                 for (auto& [idx, seed] : overlap_map) {
@@ -213,7 +239,7 @@ public:
             // guaranteed to contain exactly the same set of cells.
             Dune::SubGridPart<Grid> view = use_overlap
                 ? Dune::SubGridPart<Grid>{grid, std::move(seeds[index]), std::move(overlap_seeds)}
-                : Dune::SubGridPart<Grid>{grid, std::move(seeds[index])};
+                : Dune::SubGridPart<Grid>{grid, std::move(seeds[index]), /*overlap=*/false};
 
             // Mark the last domain for skipping if it contains isolated cells
             const bool skip = isolated_cells && (index == num_domains - 1);
@@ -355,20 +381,6 @@ public:
             // This should have updated the global matrix to be
             // dR_i/du_j evaluated at new local solutions for
             // i == j, at old solution for i != j.
-
-            // Phase 1.1: After each domain solve (Gauss-Seidel only), refresh
-            // group targets so the next domain sees updated well controls.
-            // This fixes stale ws.group_target when group-controlled wells
-            // span multiple domains.
-            //if (model_.param().local_solve_approach_ == DomainSolveApproach::GaussSeidel
-            //    && local_report.converged)
-            //{
-             //   auto logger_guard = model_.wellModel().groupStateHelper().pushLogger();
-             //   model_.wellModel().updateWellControlsAndNetwork(
-             //       /*mandatory_network_balance=*/false,
-             //       timer.currentStepLength(),
-             //       model_.wellModel().groupStateHelper().deferredLogger());
-            //}
 
             if (!local_report.converged) {
                 // TODO: more proper treatment, including in parallel.
@@ -1122,6 +1134,11 @@ private:
             // RAS: only propagate interior cells to the combined solution.
             auto local_solution = Details::extractVector(solution, domain.interior_cells);
             Details::setGlobal(local_solution, domain.interior_cells, locally_solved);
+            if (model_.param().nldd_gs_overlap_writeback_ == GaussSeidelOverlapWriteback::Restricted) {
+                Details::setGlobal(initial_local_solution, domain.cells, solution);
+                Details::setGlobal(local_solution, domain.interior_cells, solution);
+                model_.simulator().model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0, domain);
+            }
         } else {
             local_report.unconverged_domains += 1;
             wellModel_.setPrimaryVarsDomain(domain.index, initial_local_well_primary_vars);
@@ -1216,7 +1233,7 @@ private:
             return;
         }
         const auto numActivePhases = FluidSystem::numActivePhases();
-        for (const auto globalDofIdx : domain.cells) {
+        for (const auto globalDofIdx : domain.interior_cells) {
             const auto& intQuants = model_.simulator().model().intensiveQuantities(globalDofIdx, /* time_idx = */ 0);
 
             for (unsigned activePhaseIdx = 0; activePhaseIdx < numActivePhases; ++activePhaseIdx) {
@@ -1256,8 +1273,10 @@ private:
     {
         const auto numActivePhases = FluidSystem::numActivePhases();
 
-        // Check mobility changes for all cells in the domain
-        for (const auto globalDofIdx : domain.cells) {
+        // Check mobility changes only for interior cells. Overlap-cell changes
+        // are expected when neighboring domains are solved and should not make
+        // this domain appear active by themselves.
+        for (const auto globalDofIdx : domain.interior_cells) {
             const auto& intQuants = model_.simulator().model().intensiveQuantities(globalDofIdx, /* time_idx = */ 0);
 
             // Calculate average previous mobility for normalization
