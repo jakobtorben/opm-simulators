@@ -72,6 +72,7 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -165,18 +166,78 @@ public:
         assert(count == sizes);
 
         // Create the domains.
+        const bool use_overlap = (model_.param().nldd_num_overlap_layers_ > 0);
         for (int index = 0; index < num_domains; ++index) {
             std::vector<bool> interior(partition_vector.size(), false);
             for (int ix : partitions[index]) {
                 interior[ix] = true;
             }
 
-            Dune::SubGridPart<Grid> view{grid, std::move(seeds[index])};
+            // Compute overlap cells: iteratively expand N layers of
+            // face-neighbors beyond the interior cells.
+            // Also collect entity seeds for the overlap cells so we can
+            // construct the SubGridPart with a consistent view.
+            std::vector<int> overlap_cells;
+            std::vector<EntitySeed> overlap_seeds;
+            if (use_overlap) {
+                const auto& leafView = grid.leafGridView();
+                const auto& iset = leafView.indexSet();
+                const int num_layers = model_.param().nldd_num_overlap_layers_;
+
+                // Track all cells already in the domain (interior + previously added overlap).
+                std::unordered_set<int> in_domain(partitions[index].begin(),
+                                                  partitions[index].end());
+                // The frontier: cells whose face-neighbors form the next layer.
+                // Start with the interior cells.
+                std::vector<EntitySeed> frontier_seeds(seeds[index].begin(),
+                                                       seeds[index].end());
+                std::map<int, EntitySeed> overlap_map;
+
+                for (int layer = 0; layer < num_layers; ++layer) {
+                    std::vector<EntitySeed> next_frontier;
+                    for (const auto& fseed : frontier_seeds) {
+                        const auto entity = grid.entity(fseed);
+                        for (auto isect = leafView.ibegin(entity);
+                             isect != leafView.iend(entity); ++isect) {
+                            if (isect->boundary() || !isect->neighbor()) {
+                                continue;
+                            }
+                            const auto outside = isect->outside();
+                            const int nb_idx = iset.index(outside);
+                            if (in_domain.count(nb_idx) == 0) {
+                                auto [it, inserted] = overlap_map.try_emplace(nb_idx, outside.seed());
+                                if (inserted) {
+                                    in_domain.insert(nb_idx);
+                                    next_frontier.push_back(outside.seed());
+                                }
+                            }
+                        }
+                    }
+                    frontier_seeds = std::move(next_frontier);
+                    if (frontier_seeds.empty()) {
+                        break; // No more neighbors to expand
+                    }
+                }
+                overlap_cells.reserve(overlap_map.size());
+                overlap_seeds.reserve(overlap_map.size());
+                for (auto& [idx, seed] : overlap_map) {
+                    overlap_cells.push_back(idx);
+                    overlap_seeds.push_back(std::move(seed));
+                }
+            }
+
+            // Create the SubGridPart view. When overlap is used, pass the
+            // pre-computed overlap seeds so the view and domain.cells are
+            // guaranteed to contain exactly the same set of cells.
+            Dune::SubGridPart<Grid> view = use_overlap
+                ? Dune::SubGridPart<Grid>{grid, std::move(seeds[index]), std::move(overlap_seeds)}
+                : Dune::SubGridPart<Grid>{grid, std::move(seeds[index])};
 
             // Mark the last domain for skipping if it contains isolated cells
             const bool skip = isolated_cells && (index == num_domains - 1);
             this->domains_.emplace_back(index,
                                         std::move(partitions[index]),
+                                        std::move(overlap_cells),
                                         std::move(interior),
                                         std::move(view),
                                         skip);
@@ -312,6 +373,21 @@ public:
             // This should have updated the global matrix to be
             // dR_i/du_j evaluated at new local solutions for
             // i == j, at old solution for i != j.
+
+            // Phase 1.1: After each domain solve (Gauss-Seidel only), refresh
+            // group targets so the next domain sees updated well controls.
+            // This fixes stale ws.group_target when group-controlled wells
+            // span multiple domains.
+            //if (model_.param().local_solve_approach_ == DomainSolveApproach::GaussSeidel
+            //    && local_report.converged)
+            //{
+             //   auto logger_guard = model_.wellModel().groupStateHelper().pushLogger();
+             //   model_.wellModel().updateWellControlsAndNetwork(
+             //       /*mandatory_network_balance=*/false,
+             //       timer.currentStepLength(),
+             //       model_.wellModel().groupStateHelper().deferredLogger());
+            //}
+
             if (!local_report.converged) {
                 // TODO: more proper treatment, including in parallel.
                 logger.debug(fmt::format("Convergence failure in domain {} on rank {}." , domain.index, rank_));
@@ -365,6 +441,14 @@ public:
             num_local_newtons = step_newtons;
         }
 
+        // For Jacobi, each domain solve restores the full domain state
+        // in solution, accumulating only interior corrections in
+        // locally_solved. This assignment applies those accumulated
+        // corrections. For Gauss-Seidel, interior corrections are applied
+        // directly to solution during the domain loop, and overlap cells
+        // are restored per-domain in solveDomainGaussSeidel (Restricted
+        // Multiplicative Schwarz), so solution == locally_solved and the
+        // assignment would be a no-op.
         if (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
             solution = locally_solved;
             model_.simulator().model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0);
@@ -695,9 +779,10 @@ private:
                              /*curSolution=*/solution,
                              /*update=*/dx,
                              /*resid=*/dx,
-                             domain.cells); // the update routines of the black
-                                            // oil model do not care about the
-                                            // residual
+                             domain.cells); // Update all cells (interior + overlap)
+                                            // during local Newton iterations.
+                                            // RAS restriction to interior cells
+                                            // happens when writing to globally_solved.
 
         // if the solution is updated, the intensive quantities need to be recalculated
         simulator.model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0, domain);
@@ -756,7 +841,7 @@ private:
         const int bSize = B_avg.size();
         for ( int i = 0; i<bSize; ++i )
         {
-            B_avg[ i ] /= Scalar(domain.cells.size());
+            B_avg[ i ] /= Scalar(domain.interior_cells.size());
         }
 
         return {pvSumLocal, numAquiferPvSumLocal};
@@ -872,8 +957,10 @@ private:
         if (!converged_at_initial_state) {
             if (iterCtx.iteration() == 0) {
                 // Log header.
-                std::string msg = fmt::format("Domain {} on rank {}, size {}, containing cell {}\n| Iter",
-                                              domain.index, this->rank_, domain.cells.size(), domain.cells[0]);
+                std::string msg = fmt::format("Domain {} on rank {}, size {} (overlap {}), containing cell {}\n| Iter",
+                                              domain.index, this->rank_, domain.interior_cells.size(),
+                                              domain.cells.size() - domain.interior_cells.size(),
+                                              domain.interior_cells[0]);
                 for (int compIdx = 0; compIdx < numComp; ++compIdx) {
                     msg += "    MB(";
                     msg += model_.compNames().name(compIdx)[0];
@@ -943,10 +1030,10 @@ private:
                 // Use average pressures to order domains.
                 for (const auto& domain : domains_) {
                     const Scalar press_sum =
-                        std::accumulate(domain.cells.begin(), domain.cells.end(), Scalar{0},
+                        std::accumulate(domain.interior_cells.begin(), domain.interior_cells.end(), Scalar{0},
                                         [&solution](const auto acc, const auto c)
                                         { return acc + solution[c][Indices::pressureSwitchIdx]; });
-                    const Scalar avgpress = press_sum / domain.cells.size();
+                    const Scalar avgpress = press_sum / domain.interior_cells.size();
                     measure_per_domain[domain.index] = avgpress;
                 }
                 break;
@@ -955,7 +1042,7 @@ private:
                 // Use max pressures to order domains.
                 for (const auto& domain : domains_) {
                     measure_per_domain[domain.index] =
-                        std::accumulate(domain.cells.begin(), domain.cells.end(), Scalar{0},
+                        std::accumulate(domain.interior_cells.begin(), domain.interior_cells.end(), Scalar{0},
                                         [&solution](const auto acc, const auto c)
                                         { return std::max(acc, solution[c][Indices::pressureSwitchIdx]); });
                 }
@@ -967,7 +1054,7 @@ private:
                 const int num_vars = residual[0].size();
                 for (const auto& domain : domains_) {
                     Scalar maxres = 0.0;
-                    for (const int c : domain.cells) {
+                    for (const int c : domain.interior_cells) {
                         for (int ii = 0; ii < num_vars; ++ii) {
                             maxres = std::max(maxres, std::fabs(residual[c][ii]));
                         }
@@ -1000,8 +1087,9 @@ private:
         auto initial_local_solution = Details::extractVector(solution, domain.cells);
         auto convrep = solveDomain(domain, timer, local_report, logger, false);
         if (local_report.converged) {
-            auto local_solution = Details::extractVector(solution, domain.cells);
-            Details::setGlobal(local_solution, domain.cells, locally_solved);
+            // RAS: only propagate interior cells to the combined solution.
+            auto local_solution = Details::extractVector(solution, domain.interior_cells);
+            Details::setGlobal(local_solution, domain.interior_cells, locally_solved);
             Details::setGlobal(initial_local_solution, domain.cells, solution);
             model_.simulator().model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0, domain);
         } else {
@@ -1057,8 +1145,25 @@ private:
         }
         if (local_report.converged) {
             local_report.converged_domains += 1;
-            auto local_solution = Details::extractVector(solution, domain.cells);
-            Details::setGlobal(local_solution, domain.cells, locally_solved);
+            // RAS: only propagate interior cells to the combined solution.
+            auto local_solution = Details::extractVector(solution, domain.interior_cells);
+            Details::setGlobal(local_solution, domain.interior_cells, locally_solved);
+            // Restricted Multiplicative Schwarz: restore overlap cells in the
+            // global solution to their pre-solve state. Without this, overlap
+            // cell approximations (computed with frozen far-field boundaries)
+            // leak into the global solution: later domains see polluted values,
+            // and the outer iteration stagnates. By restoring, each domain in
+            // the Gauss-Seidel ordering only sees authoritative interior-cell
+            // corrections from earlier domains.
+            if (!domain.interior.empty()) {
+                for (std::size_t local_idx = 0; local_idx < domain.cells.size(); ++local_idx) {
+                    const int cell = domain.cells[local_idx];
+                    if (!domain.interior[cell]) {
+                        solution[cell] = initial_local_solution[local_idx];
+                    }
+                }
+                model_.simulator().model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0, domain);
+            }
         } else {
             local_report.unconverged_domains += 1;
             wellModel_.setPrimaryVarsDomain(domain.index, initial_local_well_primary_vars);
@@ -1076,7 +1181,7 @@ private:
         const auto& problem = simulator.problem();
         const auto& residual = simulator.model().linearizer().residual();
 
-        for (const int cell_idx : domain.cells) {
+        for (const int cell_idx : domain.interior_cells) {
             const Scalar pvValue = problem.referencePorosity(cell_idx, /*timeIdx=*/0) *
                                    model.dofTotalVolume(cell_idx);
             const auto& cellResidual = residual[cell_idx];

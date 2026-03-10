@@ -69,9 +69,13 @@ findWellDomains(const std::vector<const SubDomainIndices*>& domains)
     for (const auto& wellPtr : genWellModel_.genericWells()) {
         const int first_well_cell = wellPtr->cells().front();
         for (const auto& domain : domains) {
+            // Use the interior flag to check cell membership.
+            // With overlap, a well cell may appear in multiple domains'
+            // cells vector, but interior[cell] is true only for its
+            // owning domain.
             auto cell_present = [domain](const auto cell)
             {
-                return std::ranges::binary_search(domain->cells, cell);
+                return domain->interior[cell];
             };
 
             if (cell_present(first_well_cell)) {

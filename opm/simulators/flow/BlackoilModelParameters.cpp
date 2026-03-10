@@ -103,6 +103,7 @@ BlackoilModelParameters<Scalar>::BlackoilModelParameters()
     newton_min_iter_ = Parameters::Get<Parameters::NewtonMinIterations>();
     nldd_num_initial_newton_iter_ = Parameters::Get<Parameters::NlddNumInitialNewtonIter>();
     nldd_relative_mobility_change_tol_ = Parameters::Get<Parameters::NlddRelativeMobilityChangeTol<Scalar>>();
+    nldd_num_overlap_layers_ = Parameters::Get<Parameters::NlddNumOverlapLayers>();
     num_local_domains_ = Parameters::Get<Parameters::NumLocalDomains>();
     local_domains_partition_imbalance_ = std::max(Scalar{1.0}, Parameters::Get<Parameters::LocalDomainsPartitioningImbalance<Scalar>>());
     local_domains_partition_method_ = Parameters::Get<Parameters::LocalDomainsPartitioningMethod>();
@@ -282,6 +283,8 @@ void BlackoilModelParameters<Scalar>::registerParameters()
         ("Number of initial global Newton iterations when running the NLDD nonlinear solver.");
     Parameters::Register<Parameters::NlddRelativeMobilityChangeTol<Scalar>>
         ("Threshold for single cell relative mobility change in the NLDD solver");
+    Parameters::Register<Parameters::NlddNumOverlapLayers>
+        ("Number of overlap cell layers for NLDD domain solves (0 = no overlap).");
     Parameters::Register<Parameters::NumLocalDomains>
         ("Number of local domains for NLDD nonlinear solver.");
     Parameters::Register<Parameters::LocalDomainsPartitioningImbalance<Scalar>>

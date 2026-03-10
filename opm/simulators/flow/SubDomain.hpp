@@ -24,6 +24,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -62,20 +63,32 @@ namespace Opm
         // The index of a subdomain is arbitrary, but can be used by the
         // solvers to keep track of well locations etc.
         int index;
-        // The set of cells that make up a SubDomain, stored as cell indices
-        // in the local numbering of the current MPI rank.
+        // All cells in this subdomain (interior + overlap), sorted.
+        // Used for assembly, matrix extraction, and linear solve.
         std::vector<int> cells;
+        // Interior cells only (the original partition cells), sorted.
+        // Used for convergence checking, solution updates, and well assignment.
+        std::vector<int> interior_cells;
         // Flag for each cell of the current MPI rank, true if the cell is part
-        // of the subdomain. If empty, assumed to be all true. Not required for
-        // all nonlinear solver algorithms.
+        // of the subdomain's interior. If empty, assumed to be all true.
         std::vector<bool> interior;
         // Flag indicating if this domain should be skipped during solves
         bool skip;
-        // Enables subdomain solves and linearization using the generic linearization
-        // approach (i.e. FvBaseLinearizer as opposed to TpfaLinearizer).
-        SubDomainIndices(const int i, std::vector<int>&& c, std::vector<bool>&& in, bool s)
-            : index(i), cells(std::move(c)), interior(std::move(in)), skip(s)
-        {}
+        // Construct with overlap cells. cells = interior_cells + overlap_cells (sorted).
+        SubDomainIndices(const int i, std::vector<int>&& int_cells,
+                         std::vector<int>&& ovlp_cells,
+                         std::vector<bool>&& in, bool s)
+            : index(i)
+            , interior_cells(std::move(int_cells))
+            , interior(std::move(in))
+            , skip(s)
+        {
+            cells = interior_cells;
+            if (!ovlp_cells.empty()) {
+                cells.insert(cells.end(), ovlp_cells.begin(), ovlp_cells.end());
+                std::sort(cells.begin(), cells.end());
+            }
+        }
     };
 
     /// Representing a part of a grid, in a way suitable for performing
@@ -85,8 +98,9 @@ namespace Opm
     {
         Dune::SubGridPart<Grid> view;
         // Constructor that moves from its argument.
-        SubDomain(const int i, std::vector<int>&& c, std::vector<bool>&& in, Dune::SubGridPart<Grid>&& v, bool s)
-            : SubDomainIndices(i, std::move(c), std::move(in), s)
+        SubDomain(const int i, std::vector<int>&& c, std::vector<int>&& ovlp,
+                  std::vector<bool>&& in, Dune::SubGridPart<Grid>&& v, bool s)
+            : SubDomainIndices(i, std::move(c), std::move(ovlp), std::move(in), s)
             , view(std::move(v))
         {}
     };
