@@ -72,7 +72,6 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -173,8 +172,8 @@ public:
                 interior[ix] = true;
             }
 
-            // Compute overlap cells: iteratively expand N layers of
-            // face-neighbors beyond the interior cells.
+            // Compute overlap cells (face-neighbors of interior cells
+            // that belong to other domains on this rank).
             // Also collect entity seeds for the overlap cells so we can
             // construct the SubGridPart with a consistent view.
             std::vector<int> overlap_cells;
@@ -182,40 +181,23 @@ public:
             if (use_overlap) {
                 const auto& leafView = grid.leafGridView();
                 const auto& iset = leafView.indexSet();
-                const int num_layers = model_.param().nldd_num_overlap_layers_;
-
-                // Track all cells already in the domain (interior + previously added overlap).
-                std::unordered_set<int> in_domain(partitions[index].begin(),
-                                                  partitions[index].end());
-                // The frontier: cells whose face-neighbors form the next layer.
-                // Start with the interior cells.
-                std::vector<EntitySeed> frontier_seeds(seeds[index].begin(),
-                                                       seeds[index].end());
                 std::map<int, EntitySeed> overlap_map;
-
-                for (int layer = 0; layer < num_layers; ++layer) {
-                    std::vector<EntitySeed> next_frontier;
-                    for (const auto& fseed : frontier_seeds) {
-                        const auto entity = grid.entity(fseed);
-                        for (auto isect = leafView.ibegin(entity);
-                             isect != leafView.iend(entity); ++isect) {
-                            if (isect->boundary() || !isect->neighbor()) {
-                                continue;
-                            }
-                            const auto outside = isect->outside();
-                            const int nb_idx = iset.index(outside);
-                            if (in_domain.count(nb_idx) == 0) {
-                                auto [it, inserted] = overlap_map.try_emplace(nb_idx, outside.seed());
-                                if (inserted) {
-                                    in_domain.insert(nb_idx);
-                                    next_frontier.push_back(outside.seed());
-                                }
-                            }
+                for (std::size_t s = 0; s < seeds[index].size(); ++s) {
+                    const auto entity = grid.entity(seeds[index][s]);
+                    for (auto isect = leafView.ibegin(entity);
+                         isect != leafView.iend(entity); ++isect) {
+                        if (isect->boundary() || !isect->neighbor()) {
+                            continue;
                         }
-                    }
-                    frontier_seeds = std::move(next_frontier);
-                    if (frontier_seeds.empty()) {
-                        break; // No more neighbors to expand
+                        const auto outside = isect->outside();
+                        if (outside.partitionType() != Dune::InteriorEntity) {
+                            continue;
+                        }
+                        const int nb_idx = iset.index(outside);
+                        if (nb_idx < static_cast<int>(interior.size())
+                            && !interior[nb_idx]) {
+                            overlap_map.try_emplace(nb_idx, outside.seed());
+                        }
                     }
                 }
                 overlap_cells.reserve(overlap_map.size());
@@ -441,14 +423,6 @@ public:
             num_local_newtons = step_newtons;
         }
 
-        // For Jacobi, each domain solve restores the full domain state
-        // in solution, accumulating only interior corrections in
-        // locally_solved. This assignment applies those accumulated
-        // corrections. For Gauss-Seidel, interior corrections are applied
-        // directly to solution during the domain loop, and overlap cells
-        // are restored per-domain in solveDomainGaussSeidel (Restricted
-        // Multiplicative Schwarz), so solution == locally_solved and the
-        // assignment would be a no-op.
         if (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
             solution = locally_solved;
             model_.simulator().model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0);
@@ -1148,22 +1122,6 @@ private:
             // RAS: only propagate interior cells to the combined solution.
             auto local_solution = Details::extractVector(solution, domain.interior_cells);
             Details::setGlobal(local_solution, domain.interior_cells, locally_solved);
-            // Restricted Multiplicative Schwarz: restore overlap cells in the
-            // global solution to their pre-solve state. Without this, overlap
-            // cell approximations (computed with frozen far-field boundaries)
-            // leak into the global solution: later domains see polluted values,
-            // and the outer iteration stagnates. By restoring, each domain in
-            // the Gauss-Seidel ordering only sees authoritative interior-cell
-            // corrections from earlier domains.
-            if (!domain.interior.empty()) {
-                for (std::size_t local_idx = 0; local_idx < domain.cells.size(); ++local_idx) {
-                    const int cell = domain.cells[local_idx];
-                    if (!domain.interior[cell]) {
-                        solution[cell] = initial_local_solution[local_idx];
-                    }
-                }
-                model_.simulator().model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0, domain);
-            }
         } else {
             local_report.unconverged_domains += 1;
             wellModel_.setPrimaryVarsDomain(domain.index, initial_local_well_primary_vars);
