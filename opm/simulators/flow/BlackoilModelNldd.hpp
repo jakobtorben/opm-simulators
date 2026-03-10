@@ -350,44 +350,53 @@ public:
         DeferredLogger logger;
         std::vector<SimulatorReportSingle> domain_reports(domains_.size());
 
+        const int num_sweep_stages = this->numDomainSweepStages(domain_order.size());
+
         OPM_BEGIN_PARALLEL_TRY_CATCH()
-        for (const int domain_index : domain_order) {
-            const auto& domain = domains_[domain_index];
-            SimulatorReportSingle local_report;
-            detailTimer.reset();
-            detailTimer.start();
+        for (int sweep_stage = 0; sweep_stage < num_sweep_stages; ++sweep_stage) {
+            if (sweep_stage < static_cast<int>(domain_order.size())) {
+                const int domain_index = domain_order[sweep_stage];
+                const auto& domain = domains_[domain_index];
+                SimulatorReportSingle local_report;
+                detailTimer.reset();
+                detailTimer.start();
 
-            domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain);
+                domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain);
 
-            updateMobilities(domain);
+                updateMobilities(domain);
 
-            if (domain.skip || !domain_needs_solving_[domain_index]) {
-                local_report.skipped_domains = true;
-                local_report.converged = true;
-                domain_reports[domain.index] = local_report;
-                continue;
+                if (domain.skip || !domain_needs_solving_[domain_index]) {
+                    local_report.skipped_domains = true;
+                    local_report.converged = true;
+                    domain_reports[domain.index] = local_report;
+                } else {
+                    switch (model_.param().local_solve_approach_) {
+                    case DomainSolveApproach::Jacobi:
+                        solveDomainJacobi(solution, locally_solved, local_report, logger,
+                                          timer, domain);
+                        break;
+                    default:
+                    case DomainSolveApproach::GaussSeidel:
+                        solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
+                                               timer, domain);
+                        break;
+                    }
+                    // This should have updated the global matrix to be
+                    // dR_i/du_j evaluated at new local solutions for
+                    // i == j, at old solution for i != j.
+
+                    if (!local_report.converged) {
+                        // TODO: more proper treatment, including in parallel.
+                        logger.debug(fmt::format("Convergence failure in domain {} on rank {}.", domain.index, rank_));
+                    }
+                    local_report.solver_time += detailTimer.stop();
+                    domain_reports[domain.index] = local_report;
+                }
             }
-            switch (model_.param().local_solve_approach_) {
-            case DomainSolveApproach::Jacobi:
-                solveDomainJacobi(solution, locally_solved, local_report, logger,
-                                  timer, domain);
-                break;
-            default:
-            case DomainSolveApproach::GaussSeidel:
-                solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
-                                       timer, domain);
-                break;
-            }
-            // This should have updated the global matrix to be
-            // dR_i/du_j evaluated at new local solutions for
-            // i == j, at old solution for i != j.
 
-            if (!local_report.converged) {
-                // TODO: more proper treatment, including in parallel.
-                logger.debug(fmt::format("Convergence failure in domain {} on rank {}." , domain.index, rank_));
+            if (this->shouldRefreshWellControlsBetweenSweepStages(sweep_stage, num_sweep_stages)) {
+                this->refreshWellControlsBetweenSweepStages(solution, timer);
             }
-            local_report.solver_time += detailTimer.stop();
-            domain_reports[domain.index] = local_report;
         }
         OPM_END_PARALLEL_TRY_CATCH("Unexpected exception in local domain solve: ", model_.simulator().vanguard().grid().comm());
 
@@ -772,6 +781,70 @@ private:
 
         // if the solution is updated, the intensive quantities need to be recalculated
         simulator.model().invalidateAndUpdateIntensiveQuantities(/*timeIdx=*/0, domain);
+    }
+
+    int numDomainSweepStages(const std::size_t local_num_domains) const
+    {
+        int num_sweep_stages = static_cast<int>(local_num_domains);
+        if (!model_.param().nldd_update_well_controls_between_sweep_stages_
+            || model_.param().local_solve_approach_ != DomainSolveApproach::GaussSeidel) {
+            return num_sweep_stages;
+        }
+#if HAVE_MPI
+        const auto& comm = model_.simulator().vanguard().grid().comm();
+        if (comm.size() > 1) {
+            num_sweep_stages = comm.max(num_sweep_stages);
+        }
+#endif
+        return num_sweep_stages;
+    }
+
+    bool shouldRefreshWellControlsBetweenSweepStages(const int sweep_stage,
+                                                     const int num_sweep_stages) const
+    {
+        return model_.param().nldd_update_well_controls_between_sweep_stages_
+            && model_.param().local_solve_approach_ == DomainSolveApproach::GaussSeidel
+            && sweep_stage + 1 < num_sweep_stages;
+    }
+
+    template<class GlobalEqVector>
+    void synchronizeOverlapSolutionForWellUpdate(GlobalEqVector& solution)
+    {
+#if HAVE_MPI
+        const auto& comm = model_.simulator().vanguard().grid().comm();
+        if (comm.size() > 1) {
+            const auto* ccomm = model_.simulator().model().newtonMethod().linearSolver().comm();
+
+            ccomm->copyOwnerToAll(solution, solution);
+
+            const std::size_t num = solution.size();
+            Dune::BlockVector<std::size_t> allmeanings(num);
+            for (std::size_t ii = 0; ii < num; ++ii) {
+                allmeanings[ii] = PVUtil::pack(solution[ii]);
+            }
+            ccomm->copyOwnerToAll(allmeanings, allmeanings);
+            for (std::size_t ii = 0; ii < num; ++ii) {
+                PVUtil::unPack(solution[ii], allmeanings[ii]);
+            }
+
+            model_.simulator().model().invalidateAndUpdateIntensiveQuantitiesOverlap(/*timeIdx=*/0);
+        }
+#else
+        (void)solution;
+#endif
+    }
+
+    template<class GlobalEqVector>
+    void refreshWellControlsBetweenSweepStages(GlobalEqVector& solution,
+                                               const SimulatorTimerInterface& timer)
+    {
+        this->synchronizeOverlapSolutionForWellUpdate(solution);
+
+        auto logger_guard = model_.wellModel().groupStateHelper().pushLogger();
+        model_.wellModel().updateWellControlsAndNetwork(
+            /*mandatory_network_balance=*/false,
+            timer.currentStepLength(),
+            model_.wellModel().groupStateHelper().deferredLogger());
     }
 
     //! \brief Get reservoir quantities on this process needed for convergence calculations.
