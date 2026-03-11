@@ -298,6 +298,7 @@ void BlackoilModelParameters<Scalar>::registerParameters()
     Parameters::Register<Parameters::LocalDomainsPartitioningMethod>
         ("Subdomain partitioning method. Allowed values are "
          "'zoltan', "
+         "'well_zoltan' (dedicated well domains + Zoltan for reservoir), "
          "'simple', "
          "and the name of a partition file ending with '.partition'.");
     Parameters::Register<Parameters::LocalDomainsPartitionWellNeighborLevels>

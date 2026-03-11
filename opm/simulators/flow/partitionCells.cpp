@@ -131,6 +131,17 @@ public:
     void connectNeighbors(std::vector<int>& cells,
                           const int num_levels) const;
 
+    /// Build the grid connectivity graph (without well connections) and
+    /// always build the neighbor map.  Returns the global-to-local index
+    /// mapping needed for well cell lookup.
+    template <class GridView, class Element>
+    std::unordered_map<int, int>
+    buildLocalGraphReservoirOnly(const GridView&                                grid_view,
+                                 const Opm::ZoltanPartitioningControl<Element>& zoltan_ctrl)
+    {
+        return this->connectElements(grid_view, zoltan_ctrl, /*build_neighbor_map=*/true);
+    }
+
     /// Partition rank's interior cells into non-overlapping domains using
     /// the Zoltan graph partitioning software package.
     ///
@@ -451,6 +462,178 @@ partitionCellsZoltan(const int                                             num_d
     return partitioner.partition(num_domains, grid_view, zoltan_ctrl);
 }
 
+/// Partition cells into dedicated well domains and Zoltan-partitioned
+/// reservoir domains.  Each well's perforated cells (optionally expanded
+/// by \p num_neighbor_levels rings of face-neighbours) form their own
+/// domain.  The remaining reservoir cells are partitioned by Zoltan.
+template <class GridView, class Element>
+std::pair<std::vector<int>, int>
+partitionCellsZoltanWellDomains(
+    const int                                             num_reservoir_domains,
+    const GridView&                                       grid_view,
+    const std::vector<Opm::Well>&                         wells,
+    const std::unordered_map<std::string, std::set<int>>& possibleFutureConnections,
+    const Opm::ZoltanPartitioningControl<Element>&        zoltan_ctrl,
+    const int                                             num_neighbor_levels)
+{
+    const auto num_interior =
+        Opm::detail::countLocalInteriorCellsGridView(grid_view);
+
+    if (wells.empty()) {
+        // No wells -- fall back to regular Zoltan partitioning.
+        return partitionCellsZoltan(num_reservoir_domains, grid_view, wells,
+                                    possibleFutureConnections, zoltan_ctrl, 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1: Build grid connectivity (no well merging in graph) and
+    //          the neighbor map for potential cell expansion.
+    // -----------------------------------------------------------------
+    auto partitioner = ZoltanPartitioner { grid_view, zoltan_ctrl.local_to_global };
+    auto g2l = partitioner.buildLocalGraphReservoirOnly(grid_view, zoltan_ctrl);
+
+    // -----------------------------------------------------------------
+    // Phase 2: Identify well cell groups (with neighbor expansion).
+    // -----------------------------------------------------------------
+    auto futureConns = possibleFutureConnections;
+    Opm::Parallel::MpiSerializer ser(grid_view.comm());
+    ser.broadcast(Opm::Parallel::RootRank{0}, futureConns);
+
+    auto distributedWells = 0;
+    std::vector<std::vector<int>> raw_well_groups;
+
+    for (const auto& well : wells) {
+        auto cellIx = std::vector<int>{};
+        auto otherProc = 0;
+
+        for (const auto& conn : well.getConnections()) {
+            auto locPos = g2l.find(conn.global_index());
+            if (locPos == g2l.end()) {
+                ++otherProc;
+                continue;
+            }
+            cellIx.push_back(locPos->second);
+        }
+
+        const auto futureIt = futureConns.find(well.name());
+        if (futureIt != futureConns.end()) {
+            for (const auto& global_index : futureIt->second) {
+                auto locPos = g2l.find(global_index);
+                if (locPos == g2l.end()) {
+                    ++otherProc;
+                    continue;
+                }
+                cellIx.push_back(locPos->second);
+            }
+        }
+
+        if ((otherProc > 0) && !cellIx.empty()) {
+            ++distributedWells;
+            continue;
+        }
+
+        if (cellIx.empty()) {
+            continue;
+        }
+
+        if (num_neighbor_levels > 0) {
+            partitioner.connectNeighbors(cellIx, num_neighbor_levels);
+        }
+
+        raw_well_groups.push_back(std::move(cellIx));
+    }
+
+    OPM_BEGIN_PARALLEL_TRY_CATCH()
+
+    if (distributedWells > 0) {
+        const auto* pl = (distributedWells == 1) ? "" : "s";
+        throw std::invalid_argument {
+            fmt::format(R"({} distributed well{} detected on rank {}.
+This is not supported in the current NLDD implementation.)",
+                        distributedWells, pl, grid_view.comm().rank())
+        };
+    }
+
+    OPM_END_PARALLEL_TRY_CATCH(
+        std::string{"partitionCellsZoltanWellDomains(): Distributed well detected. "
+                    "This is not supported in the current NLDD implementation"},
+        grid_view.comm())
+
+    // -----------------------------------------------------------------
+    // Phase 3: Merge overlapping well groups using union-find.
+    // -----------------------------------------------------------------
+    const auto nGroups = static_cast<int>(raw_well_groups.size());
+    std::vector<int> uf_parent(nGroups);
+    std::iota(uf_parent.begin(), uf_parent.end(), 0);
+
+    auto ufFind = [&uf_parent](int x) {
+        while (uf_parent[x] != x) {
+            uf_parent[x] = uf_parent[uf_parent[x]];
+            x = uf_parent[x];
+        }
+        return x;
+    };
+
+    auto ufUnite = [&uf_parent, &ufFind](int a, int b) {
+        a = ufFind(a);
+        b = ufFind(b);
+        if (a != b) { uf_parent[b] = a; }
+    };
+
+    {
+        std::unordered_map<int, int> cell_owner; // cell -> first group index
+        for (int g = 0; g < nGroups; ++g) {
+            for (const int cell : raw_well_groups[g]) {
+                auto [it, inserted] = cell_owner.try_emplace(cell, g);
+                if (!inserted) {
+                    ufUnite(g, it->second);
+                }
+            }
+        }
+    }
+
+    // Renumber merged groups consecutively.
+    std::unordered_map<int, int> root_to_domain;
+    int num_well_domains = 0;
+    for (int g = 0; g < nGroups; ++g) {
+        const int root = ufFind(g);
+        auto [it, inserted] = root_to_domain.try_emplace(root, num_well_domains);
+        if (inserted) {
+            ++num_well_domains;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 4: Build partition vector -- well cells first.
+    // -----------------------------------------------------------------
+    auto partition = std::vector<int>(num_interior, -1);
+    std::vector<bool> is_well_cell(num_interior, false);
+
+    for (int g = 0; g < nGroups; ++g) {
+        const int domain_id = root_to_domain[ufFind(g)];
+        for (const int cell : raw_well_groups[g]) {
+            partition[cell] = domain_id;
+            is_well_cell[cell] = true;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 5: Partition remaining (reservoir) cells with Zoltan.
+    // -----------------------------------------------------------------
+    const int num_res_target = std::max(1, num_reservoir_domains);
+    auto [reservoir_part, num_res_actual] =
+        partitioner.partition(num_res_target, grid_view, zoltan_ctrl);
+
+    // Assign reservoir cells with domain IDs offset by num_well_domains.
+    for (int i = 0; i < num_interior; ++i) {
+        if (!is_well_cell[i]) {
+            partition[i] = reservoir_part[i] + num_well_domains;
+        }
+    }
+
+    return Opm::util::compressAndCountPartitionIDs(std::move(partition));
+}
+
 } // Anonymous namespace
 
 #endif // HAVE_MPI && HAVE_ZOLTAN
@@ -677,6 +860,18 @@ Opm::partitionCells(const std::string& method,
 #else // !HAVE_MPI || !HAVE_ZOLTAN
 
         OPM_THROW(std::runtime_error, "Zoltan requested for local domain partitioning, "
+                  "but is not available in the current build configuration.");
+
+#endif // HAVE_MPI && HAVE_ZOLTAN
+    }
+    else if (method == "well_zoltan") {
+#if HAVE_MPI && HAVE_ZOLTAN
+
+        return partitionCellsZoltanWellDomains(num_local_domains, grid_view, wells, possibleFutureConnections, zoltan_ctrl, num_neighbor_levels);
+
+#else // !HAVE_MPI || !HAVE_ZOLTAN
+
+        OPM_THROW(std::runtime_error, "well_zoltan requested for local domain partitioning, "
                   "but is not available in the current build configuration.");
 
 #endif // HAVE_MPI && HAVE_ZOLTAN

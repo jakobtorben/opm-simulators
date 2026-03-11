@@ -670,6 +670,138 @@ BOOST_AUTO_TEST_CASE(PartitionCellsWithNeighborConnectivityTest)
 #endif
 }
 
+BOOST_AUTO_TEST_CASE(WellZoltanBasicTest)
+{
+    // Create a 1D grid with 7 cells and two wells.
+    // The "well_zoltan" method should create dedicated well domains
+    // for each well, and partition the remaining cells with Zoltan.
+    //
+    // Cell indices:    0    1    2    3    4    5    6
+    // Well layout:     W1---W1   |    W2---W2   |    |
+    //
+    // Expected: Well 1 cells (0,1) in one domain,
+    //           Well 2 cells (3,4) in another domain,
+    //           Remaining cells (2,5,6) partitioned by Zoltan.
+    auto grid = createTestGrid({7, 1, 1}, {7.0, 1.0, 1.0});
+    using Entity = typename Dune::CpGrid::LeafGridView::template Codim<0>::Entity;
+    auto zoltan_ctrl = createZoltanControl<Entity>(grid);
+
+    auto wells = createWellsWithConnections({
+        {"TESTW1", {0, 1}},    // Well 1 connects cells 0,1
+        {"TESTW2", {3, 4}}     // Well 2 connects cells 3,4
+    });
+
+#if HAVE_MPI && HAVE_ZOLTAN
+    auto [part, num_part] = Opm::partitionCells("well_zoltan", 3, grid.leafGridView(),
+                                               wells,
+                                               std::unordered_map<std::string, std::set<int>>{},
+                                               zoltan_ctrl,
+                                               0);
+
+    BOOST_CHECK_EQUAL(part.size(), 7);
+    // At least 2 well domains + some reservoir domains
+    BOOST_CHECK(num_part >= 3);
+
+    // Well 1 cells should be in the same domain
+    BOOST_CHECK_EQUAL(part[0], part[1]);
+
+    // Well 2 cells should be in the same domain
+    BOOST_CHECK_EQUAL(part[3], part[4]);
+
+    // Well 1 and Well 2 should be in different domains
+    BOOST_CHECK(part[0] != part[3]);
+
+    // Reservoir cells (2, 5, 6) should NOT be in any well domain
+    BOOST_CHECK(part[2] != part[0]);
+    BOOST_CHECK(part[2] != part[3]);
+    BOOST_CHECK(part[5] != part[0]);
+    BOOST_CHECK(part[5] != part[3]);
+    BOOST_CHECK(part[6] != part[0]);
+    BOOST_CHECK(part[6] != part[3]);
+#endif
+}
+
+BOOST_AUTO_TEST_CASE(WellZoltanWithNeighborExpansionTest)
+{
+    // Test that well domains are expanded by neighbor levels.
+    //
+    // Cell indices:    0    1    2    3    4    5    6
+    // Well layout:               W1        W2
+    //
+    // With neighbor_levels=1:
+    //   Well 1 domain: cells 1, 2, 3 (cell 2 + 1 level each direction)
+    //   Well 2 domain: cells 3, 4, 5 (cell 4 + 1 level each direction)
+    //   Overlapping cell 3 => wells should merge into one domain.
+    auto grid = createTestGrid({7, 1, 1}, {7.0, 1.0, 1.0});
+    using Entity = typename Dune::CpGrid::LeafGridView::template Codim<0>::Entity;
+    auto zoltan_ctrl = createZoltanControl<Entity>(grid);
+
+    auto wells = createWellsWithConnections({
+        {"WELL1", {2}},    // Well 1 in cell 2
+        {"WELL2", {4}}     // Well 2 in cell 4
+    });
+
+#if HAVE_MPI && HAVE_ZOLTAN
+    auto [part, num_part] = Opm::partitionCells("well_zoltan", 2, grid.leafGridView(),
+                                               wells,
+                                               std::unordered_map<std::string, std::set<int>>{},
+                                               zoltan_ctrl,
+                                               1);
+
+    BOOST_CHECK_EQUAL(part.size(), 7);
+
+    // With neighbor_levels=1, well 1 expands to {1,2,3} and well 2 to {3,4,5}.
+    // They overlap on cell 3, so they merge into one well domain.
+    BOOST_CHECK_EQUAL(part[1], part[2]);
+    BOOST_CHECK_EQUAL(part[2], part[3]);
+    BOOST_CHECK_EQUAL(part[3], part[4]);
+    BOOST_CHECK_EQUAL(part[4], part[5]);
+
+    // Cells 0 and 6 should be in reservoir domain(s), not the well domain.
+    BOOST_CHECK(part[0] != part[2]);
+    BOOST_CHECK(part[6] != part[2]);
+#endif
+}
+
+BOOST_AUTO_TEST_CASE(WellZoltanOverlappingWellsTest)
+{
+    // Two wells that share a cell -- they should be merged into one well domain.
+    //
+    // Cell indices:    0    1    2    3    4    5    6
+    // Well layout:     W1---W1---W1
+    //                            W2---W2
+    //
+    // Wells share cell 2, so all of {0,1,2,3,4} should be in one well domain.
+    auto grid = createTestGrid({7, 1, 1}, {7.0, 1.0, 1.0});
+    using Entity = typename Dune::CpGrid::LeafGridView::template Codim<0>::Entity;
+    auto zoltan_ctrl = createZoltanControl<Entity>(grid);
+
+    auto wells = createWellsWithConnections({
+        {"TESTW1", {0, 1, 2}},
+        {"TESTW2", {2, 3, 4}}
+    });
+
+#if HAVE_MPI && HAVE_ZOLTAN
+    auto [part, num_part] = Opm::partitionCells("well_zoltan", 2, grid.leafGridView(),
+                                               wells,
+                                               std::unordered_map<std::string, std::set<int>>{},
+                                               zoltan_ctrl,
+                                               0);
+
+    BOOST_CHECK_EQUAL(part.size(), 7);
+
+    // All well cells should be in the same domain (merged due to shared cell 2)
+    BOOST_CHECK_EQUAL(part[0], part[1]);
+    BOOST_CHECK_EQUAL(part[1], part[2]);
+    BOOST_CHECK_EQUAL(part[2], part[3]);
+    BOOST_CHECK_EQUAL(part[3], part[4]);
+
+    // Reservoir cells should not be in the well domain
+    BOOST_CHECK(part[5] != part[0]);
+    BOOST_CHECK(part[6] != part[0]);
+#endif
+}
+
 bool
 init_unit_test_func()
 {

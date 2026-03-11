@@ -242,7 +242,10 @@ namespace Opm
 
     void SimulatorReportSingle::reportNLDD(std::ostream& os, const SimulatorReportSingle* failureReport) const
     {
-        os << fmt::format("Owned + overlap cells:       {:7}\n", num_owned_cells + num_overlap_cells);
+        os << fmt::format("Owned cells:                 {:7}\n", num_owned_cells);
+        if (num_overlap_cells > 0) {
+            os << fmt::format("Overlap cells:               {:7}\n", num_overlap_cells);
+        }
         os << fmt::format("Number of wells:             {:7}\n", num_wells);
         os << fmt::format("Number of domains:           {:7}\n", num_domains);
         os << fmt::format("-------------------------------------------------------\n");

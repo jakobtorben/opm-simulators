@@ -1279,7 +1279,8 @@ private:
         };
 
         // Forming the list of wells is expensive, so do this only if needed.
-        const auto need_wells = param.local_domains_partition_method_ == "zoltan";
+        const auto need_wells = (param.local_domains_partition_method_ == "zoltan")
+            || (param.local_domains_partition_method_ == "well_zoltan");
 
         const auto wells = need_wells
             ? this->model_.simulator().vanguard().schedule().getWellsatEnd()
