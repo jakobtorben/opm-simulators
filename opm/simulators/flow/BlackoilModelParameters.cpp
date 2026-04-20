@@ -104,6 +104,7 @@ BlackoilModelParameters<Scalar>::BlackoilModelParameters()
     nldd_num_initial_newton_iter_ = Parameters::Get<Parameters::NlddNumInitialNewtonIter>();
     nldd_relative_mobility_change_tol_ = Parameters::Get<Parameters::NlddRelativeMobilityChangeTol<Scalar>>();
     nldd_num_overlap_layers_ = Parameters::Get<Parameters::NlddNumOverlapLayers>();
+    nldd_num_outer_sweeps_ = Parameters::Get<Parameters::NlddNumOuterSweeps>();
     nldd_update_well_controls_between_sweep_stages_ = Parameters::Get<Parameters::NlddUpdateWellControlsBetweenSweepStages>();
     nldd_gs_overlap_writeback_ = gaussSeidelOverlapWritebackFromString(Parameters::Get<Parameters::NlddGaussSeidelOverlapWriteback>());
     num_local_domains_ = Parameters::Get<Parameters::NumLocalDomains>();
@@ -287,6 +288,8 @@ void BlackoilModelParameters<Scalar>::registerParameters()
         ("Threshold for single cell relative mobility change in the NLDD solver");
     Parameters::Register<Parameters::NlddNumOverlapLayers>
         ("Number of overlap cell layers for NLDD domain solves (0 = no overlap).");
+    Parameters::Register<Parameters::NlddNumOuterSweeps>
+        ("Number of outer sweeps over all domains per NLDD iteration (default 1).");
     Parameters::Register<Parameters::NlddUpdateWellControlsBetweenSweepStages>
         ("Whether Gauss-Seidel NLDD should refresh global well controls between sweep stages.");
     Parameters::Register<Parameters::NlddGaussSeidelOverlapWriteback>

@@ -342,63 +342,84 @@ public:
         auto initial_solution = solution;
         auto locally_solved = initial_solution;
 
-        // -----------   Decide on an ordering for the domains   -----------
-        const auto domain_order = this->getSubdomainOrder();
-        local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
-
-        // -----------   Solve each domain separately   -----------
+        // -----------   Outer sweep loop   -----------
         DeferredLogger logger;
-        std::vector<SimulatorReportSingle> domain_reports(domains_.size());
+        const int nldd_num_outer_sweeps = model_.param().nldd_num_outer_sweeps_;
 
-        const int num_sweep_stages = this->numDomainSweepStages(domain_order.size());
+        // Counts accumulated over all outer sweeps
+        int total_converged = 0;
+        int total_converged_already = 0;
+        int total_local_newtons = 0;
+        int total_skipped = 0;
 
-        OPM_BEGIN_PARALLEL_TRY_CATCH()
-        for (int sweep_stage = 0; sweep_stage < num_sweep_stages; ++sweep_stage) {
-            if (sweep_stage < static_cast<int>(domain_order.size())) {
-                const int domain_index = domain_order[sweep_stage];
-                const auto& domain = domains_[domain_index];
-                SimulatorReportSingle local_report;
-                detailTimer.reset();
-                detailTimer.start();
+        for (int outer_iter = 0; outer_iter < nldd_num_outer_sweeps; ++outer_iter) {
+            detailTimer.reset();
+            detailTimer.start();
 
-                domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain);
+            // -----------   Decide on an ordering for the domains   -----------
+            const auto domain_order = this->getSubdomainOrder();
+            local_reports_accumulated_.success.pre_post_time += detailTimer.stop();
 
-                updateMobilities(domain);
+            // -----------   Solve each domain separately   -----------
+            std::vector<SimulatorReportSingle> domain_reports(domains_.size());
 
-                if (domain.skip || !domain_needs_solving_[domain_index]) {
-                    local_report.skipped_domains = true;
-                    local_report.converged = true;
-                    domain_reports[domain.index] = local_report;
-                } else {
-                    switch (model_.param().local_solve_approach_) {
-                    case DomainSolveApproach::Jacobi:
-                        solveDomainJacobi(solution, locally_solved, local_report, logger,
-                                          timer, domain);
-                        break;
-                    default:
-                    case DomainSolveApproach::GaussSeidel:
-                        solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
-                                               timer, domain);
-                        break;
+            const int num_sweep_stages = this->numDomainSweepStages(domain_order.size());
+
+            OPM_BEGIN_PARALLEL_TRY_CATCH()
+            for (int sweep_stage = 0; sweep_stage < num_sweep_stages; ++sweep_stage) {
+                if (sweep_stage < static_cast<int>(domain_order.size())) {
+                    const int domain_index = domain_order[sweep_stage];
+                    const auto& domain = domains_[domain_index];
+                    SimulatorReportSingle local_report;
+                    detailTimer.reset();
+                    detailTimer.start();
+
+                    domain_needs_solving_[domain_index] = checkIfSubdomainNeedsSolving(domain);
+
+                    updateMobilities(domain);
+
+                    if (domain.skip || !domain_needs_solving_[domain_index]) {
+                        local_report.skipped_domains = true;
+                        local_report.converged = true;
+                        domain_reports[domain.index] = local_report;
+                    } else {
+                        switch (model_.param().local_solve_approach_) {
+                        case DomainSolveApproach::Jacobi:
+                            solveDomainJacobi(solution, locally_solved, local_report, logger,
+                                              timer, domain);
+                            break;
+                        default:
+                        case DomainSolveApproach::GaussSeidel:
+                            solveDomainGaussSeidel(solution, locally_solved, local_report, logger,
+                                                   timer, domain);
+                            break;
+                        }
+                        // This should have updated the global matrix to be
+                        // dR_i/du_j evaluated at new local solutions for
+                        // i == j, at old solution for i != j.
+
+                        if (!local_report.converged) {
+                            // TODO: more proper treatment, including in parallel.
+                            logger.debug(fmt::format("Convergence failure in domain {} on rank {}.", domain.index, rank_));
+                        }
+                        local_report.solver_time += detailTimer.stop();
+                        domain_reports[domain.index] = local_report;
                     }
-                    // This should have updated the global matrix to be
-                    // dR_i/du_j evaluated at new local solutions for
-                    // i == j, at old solution for i != j.
+                }
 
-                    if (!local_report.converged) {
-                        // TODO: more proper treatment, including in parallel.
-                        logger.debug(fmt::format("Convergence failure in domain {} on rank {}.", domain.index, rank_));
-                    }
-                    local_report.solver_time += detailTimer.stop();
-                    domain_reports[domain.index] = local_report;
+                if (this->shouldRefreshWellControlsBetweenSweepStages(sweep_stage, num_sweep_stages)) {
+                    this->refreshWellControlsBetweenSweepStages(solution, timer);
                 }
             }
+            OPM_END_PARALLEL_TRY_CATCH("Unexpected exception in local domain solve: ", model_.simulator().vanguard().grid().comm());
 
-            if (this->shouldRefreshWellControlsBetweenSweepStages(sweep_stage, num_sweep_stages)) {
-                this->refreshWellControlsBetweenSweepStages(solution, timer);
-            }
-        }
-        OPM_END_PARALLEL_TRY_CATCH("Unexpected exception in local domain solve: ", model_.simulator().vanguard().grid().comm());
+            // Process and log stats for this outer sweep
+            auto sweep_stats = processOuterSweepResults(outer_iter, domain_reports, logger);
+            total_converged += sweep_stats.converged;
+            total_converged_already += sweep_stats.converged_already;
+            total_local_newtons += sweep_stats.newton_iterations;
+            total_skipped += sweep_stats.skipped;
+        } // end outer sweep loop
 
         detailTimer.reset();
         detailTimer.start();
@@ -409,40 +430,18 @@ public:
         // Accumulate local solve data.
         // Putting the counts in a single array to avoid multiple
         // comm.sum() calls. Keeping the named vars for readability.
-        std::array<int, 5> counts{ 0, 0, 0, static_cast<int>(domain_reports.size()), 0 };
+        std::array<int, 5> counts{
+            total_converged,
+            total_converged_already,
+            total_local_newtons,
+            static_cast<int>(domains_.size()),
+            total_skipped
+        };
         int& num_converged = counts[0];
         int& num_converged_already = counts[1];
         int& num_local_newtons = counts[2];
         int& num_domains = counts[3];
         int& num_skipped = counts[4];
-        {
-            auto step_newtons = 0;
-            const auto dr_size = domain_reports.size();
-            for (auto i = 0*dr_size; i < dr_size; ++i) {
-                // Reset the needsSolving flag for the next iteration
-                domain_needs_solving_[i] = false;
-                const auto& dr = domain_reports[i];
-                if (dr.converged) {
-                    ++num_converged;
-                    if (dr.total_newton_iterations == 0) {
-                        ++num_converged_already;
-                    }
-                    else {
-                        // If we needed to solve the domain, we also solve in next iteration
-                        domain_needs_solving_[i] = true;
-                    }
-                }
-                if (dr.skipped_domains) {
-                    ++num_skipped;
-                }
-                step_newtons += dr.total_newton_iterations;
-                // Accumulate local reports per domain
-                domain_reports_accumulated_[i] += dr;
-                // Accumulate local reports per rank
-                local_reports_accumulated_ += dr;
-            }
-            num_local_newtons = step_newtons;
-        }
 
         if (model_.param().local_solve_approach_ == DomainSolveApproach::Jacobi) {
             solution = locally_solved;
@@ -485,8 +484,8 @@ public:
 
         const bool is_iorank = this->rank_ == 0;
         if (is_iorank) {
-            OpmLog::debug(fmt::format(fmt::runtime("Local solves finished. Converged for {}/{} domains. {} domains were skipped. {} domains did no work. {} total local Newton iterations.\n"),
-                                      num_converged, num_domains, num_skipped, num_converged_already, num_local_newtons));
+            OpmLog::debug(fmt::format(fmt::runtime("Local solves finished ({} outer sweep(s)). Converged for {}/{} domain solves. {} skipped. {} did no work. {} total local Newton iterations.\n"),
+                                      nldd_num_outer_sweeps, num_converged, num_domains * nldd_num_outer_sweeps, num_skipped, num_converged_already, num_local_newtons));
         }
         auto total_local_solve_time = localSolveTimer.stop();
         report.local_solve_time += total_local_solve_time;
@@ -1372,6 +1371,49 @@ private:
             }
         }
         return false;
+    }
+
+    //! \brief Process and report the results of a single NLDD outer sweep
+    struct OuterSweepStats {
+        int converged = 0;
+        int converged_already = 0;
+        int newton_iterations = 0;
+        int skipped = 0;
+    };
+
+    OuterSweepStats processOuterSweepResults(const int outer_iter,
+                                             const std::vector<SimulatorReportSingle>& iter_reports,
+                                             DeferredLogger& logger)
+    {
+        OuterSweepStats stats;
+        const auto dr_size = iter_reports.size();
+        for (auto i = 0*dr_size; i < dr_size; ++i) {
+            // Reset the needsSolving flag for the next outer sweep / iteration
+            domain_needs_solving_[i] = false;
+            const auto& dr = iter_reports[i];
+            if (dr.converged) {
+                ++stats.converged;
+                if (dr.total_newton_iterations == 0) {
+                    ++stats.converged_already;
+                } else {
+                    // If we needed to solve the domain, also solve in next sweep/iteration
+                    domain_needs_solving_[i] = true;
+                }
+            }
+            if (dr.skipped_domains) {
+                ++stats.skipped;
+            }
+            stats.newton_iterations += dr.total_newton_iterations;
+            // Accumulate local reports per domain
+            domain_reports_accumulated_[i] += dr;
+            // Accumulate local reports per rank
+            local_reports_accumulated_ += dr;
+        }
+
+        logger.debug(fmt::format("Rank {} NLDD outer sweep {} - Converged {}/{}, skipped {}, no work {}, local Newton iters {}.",
+                                 rank_, outer_iter, stats.converged, domains_.size(), stats.skipped,
+                                 stats.converged_already, stats.newton_iterations));
+        return stats;
     }
 
     BlackoilModel<TypeTag>& model_; //!< Reference to model
