@@ -309,7 +309,7 @@ nonlinearIterationNewton(const SimulatorTimerInterface& timer,
                                   simulator().model().linearizer().residual());
 
             // ---- Solve linear system ----
-            solveJacobianSystem(x);
+            solveJacobianSystem(x, &report);
 
             // If the solver produced a well solution (system solver),
             // pass it to the well model for use during postSolve.
@@ -473,7 +473,7 @@ relativeChange() const
 template <class TypeTag>
 void
 BlackoilModel<TypeTag>::
-solveJacobianSystem(BVector& x)
+solveJacobianSystem(BVector& x, Opm::SimulatorReportSingle* report_ptr)
 {
     auto& jacobian = simulator_.model().linearizer().jacobian().istlMatrix();
     auto& residual = simulator_.model().linearizer().residual();
@@ -500,7 +500,7 @@ solveJacobianSystem(BVector& x)
             perfTimer.reset();
             linSolver.setResidual(residual);
             perfTimer.start();
-            linSolver.solve(x_trial[solver]);
+            linSolver.solve(x_trial[solver], report_ptr);
             times[solver] = perfTimer.stop();
             perfTimer.reset();
             if (terminal_output_) {
@@ -528,7 +528,7 @@ solveJacobianSystem(BVector& x)
         // account for parallelization properly. since the residual of ECFV
         // discretizations does not need to be synchronized across processes to be
         // consistent, this is not relevant for OPM-flow...
-        linSolver.solve(x);
+        linSolver.solve(x, report_ptr);
     }
 }
 
