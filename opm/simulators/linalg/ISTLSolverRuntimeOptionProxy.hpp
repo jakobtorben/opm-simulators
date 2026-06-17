@@ -50,6 +50,7 @@ class ISTLSolverRuntimeOptionProxy : public AbstractISTLSolver<GetPropType<TypeT
 public:
     using SparseMatrixAdapter = GetPropType<TypeTag, Properties::SparseMatrixAdapter>;
     using Vector = GetPropType<TypeTag, Properties::GlobalEqVector>;
+    using Parent = AbstractISTLSolver<SparseMatrixAdapter, Vector>;
     using Simulator = GetPropType<TypeTag, Properties::Simulator>;
     using Matrix = typename SparseMatrixAdapter::IstlMatrix;
 
@@ -147,14 +148,14 @@ public:
         return istlSolver_->getSolveCount();
     }
 
-    std::optional<typename AbstractISTLSolver<TypeTag>::WellSolutionView>
+    std::optional<typename Parent::WellSolutionView>
     getWellSolution() const override
     {
         return istlSolver_->getWellSolution();
     }
 
 private:
-    std::unique_ptr<AbstractISTLSolver<SparseMatrixAdapter, Vector>> istlSolver_;
+    std::unique_ptr<Parent> istlSolver_;
 
 
     template <class... Args>

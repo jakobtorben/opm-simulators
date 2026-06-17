@@ -54,6 +54,7 @@ public:
 #endif
 
     using Matrix = typename SparseMatrixAdapter::IstlMatrix;
+    using Scalar = typename SparseMatrixAdapter::Scalar;
 
     virtual ~AbstractISTLSolver() = default;
 
@@ -151,8 +152,6 @@ public:
      * - setMatrix(const SparseMatrixAdapter& M)
      */
     virtual bool solve(Vector& x,  Opm::SimulatorReportSingle* report_ptr) = 0;
-
-    using Scalar = GetPropType<TypeTag, Properties::Scalar>;
 
     /// Non-owning view of the well solution produced by a coupled system solve.
     struct WellSolutionView {
