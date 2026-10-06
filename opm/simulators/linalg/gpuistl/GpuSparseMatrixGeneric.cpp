@@ -100,8 +100,11 @@ GpuSparseMatrixGeneric<T>::initializeMatrixDescriptor()
 {
     // Create matrix descriptor based on blockSize
     if (m_blockSize > 1) {
-#if !USE_HIP && CUDA_VERSION >= 12030
-        // Use BSR format for blocked matrices (requires CUDA 12.3+)
+#if !USE_HIP && CUDA_VERSION >= 12030 && (CUDA_VERSION < 13000 || CUDA_VERSION >= 13020)
+        // Use BSR format for blocked matrices via the Generic API.
+        // Requires CUDA >= 12.3. Note: cuSPARSE Generic BSR SpMV was broken in
+        // CUDA 13.0 and 13.1 (CUSPARSE_STATUS_NOT_SUPPORTED at runtime) and
+        // restored in CUDA 13.2 — so those versions are explicitly excluded.
         OPM_CUSPARSE_SAFE_CALL(cusparseCreateBsr(m_matrixDescriptor.get(),
                                                  m_numberOfRows,
                                                  m_numberOfRows,
@@ -117,7 +120,11 @@ GpuSparseMatrixGeneric<T>::initializeMatrixDescriptor()
                                                  getDataType(),
                                                  CUSPARSE_ORDER_ROW));
 #else
-        OPM_THROW(std::invalid_argument, "BSR format not supported for HIP or CUDA < 12.3 with Generic API");
+        OPM_THROW(std::invalid_argument,
+                  "BSR format via cuSPARSE Generic API is not supported on this platform. "
+                  "Requires CUDA >= 12.3, excluding CUDA 13.0 and 13.1 due to a cuSPARSE regression "
+                  "(cusparseSpMV returns CUSPARSE_STATUS_NOT_SUPPORTED for BSR). "
+                  "Use CUDA 12.3–12.x or CUDA >= 13.2.");
 #endif
     } else {
         // Use CSR format for scalar matrices
