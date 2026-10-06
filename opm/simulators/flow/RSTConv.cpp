@@ -39,10 +39,11 @@ void RSTConv::init(const std::size_t numCells,
                    const std::array<int,6>& compIdx)
 {
     const auto kw = rst_config.keywords.find("CONV");
-    if (kw == rst_config.keywords.end()) {
+    this->enabled_ = kw != rst_config.keywords.end();
+    this->convNewPrepared_ = false;
+
+    if (!this->enabled_) {
         N_ = 0;
-        cnv_X_.clear();
-        conv_new_.clear();
         return;
     }
 
@@ -51,15 +52,21 @@ void RSTConv::init(const std::size_t numCells,
 
     cnv_X_.resize(6);
     for (std::size_t i = 0; i < 6; ++i) {
-        if (compIdx_[i] > -1) {
-            cnv_X_[i].resize(numCells);
+        if ((compIdx_[i] > -1) && (cnv_X_[i].size() != numCells)) {
+            cnv_X_[i].assign(numCells, 0);
         }
     }
-    conv_new_.resize(numCells, 1);
+    if (conv_new_.size() != numCells) {
+        conv_new_.assign(numCells, 0);
+    }
 }
 
 void RSTConv::outputRestart(data::Solution& sol)
 {
+    if (!this->enabled_ || this->conv_new_.empty()) {
+        return;
+    }
+
     if (!this->cnv_X_.empty()) {
         constexpr const std::array names{"CNV_OIL", "CNV_GAS", "CNV_WAT",
                                          "CNV_PLY", "CNV_SAL", "CNV_SOL"};
@@ -67,26 +74,39 @@ void RSTConv::outputRestart(data::Solution& sol)
                               [i = 0, &names, &sol](auto& cnv) mutable
                               {
                                   if (!cnv.empty()) {
-                                      sol.insert(names[i], std::move(cnv), data::TargetType::RESTART_SOLUTION);
+                                      sol.insert(names[i], cnv, data::TargetType::RESTART_SOLUTION);
                                   }
                                   ++i;
                               });
-        sol.insert("CONV_NEW", std::move(conv_new_), data::TargetType::RESTART_SOLUTION);
     }
+
+    sol.insert("CONV_NEW", conv_new_, data::TargetType::RESTART_SOLUTION);
 }
 
 bool RSTConv::hasConv() const
 {
-    return !conv_new_.empty();
+    return this->enabled_;
 }
 
 void RSTConv::prepareConv()
 {
-    std::ranges::fill(conv_new_, 1);
+    if (!this->enabled_ || this->convNewPrepared_) {
+        return;
+    }
+
+    std::ranges::for_each(this->conv_new_, [](int& value)
+                          { ++value; });
+    this->convNewPrepared_ = true;
 }
 
 void RSTConv::updateNewton(const std::vector<int>& convNewt)
 {
+    if (!this->enabled_ || this->conv_new_.empty()) {
+        return;
+    }
+
+    this->prepareConv();
+
     const std::size_t numGloCells = conv_new_.size();
 
     if (comm_.size() == 1) {

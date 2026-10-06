@@ -93,6 +93,8 @@ private:
     std::vector<int> conv_new_{}; //!< Number of Newtons by each cell
     std::array<int,6> compIdx_{}; //!< Component indices
     int N_ = 0; //!< Number of cells to consider
+    bool enabled_ = false; //!< True when CONV output is requested for the current step
+    bool convNewPrepared_ = false; //!< True once the current step baseline has been counted
 };
 
 } // namespace Opm

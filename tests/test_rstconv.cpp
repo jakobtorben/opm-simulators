@@ -34,6 +34,7 @@
 #include <dune/istl/bvector.hh>
 
 #include <opm/input/eclipse/Schedule/RSTConfig.hpp>
+#include <opm/output/data/Solution.hpp>
 #include <opm/simulators/flow/RSTConv.hpp>
 
 #include <algorithm>
@@ -154,6 +155,36 @@ BOOST_AUTO_TEST_CASE(RstConvTest)
     Opm::RSTConv cnv([&cellMapping](const int idx) { return cellMapping[idx]; }, cc);
     cnv.init(10*cc.size(), rst, sample.phase);
 
+    constexpr std::array convNames{"CNV_OIL", "CNV_GAS", "CNV_WAT",
+                                   "CNV_PLY", "CNV_SAL", "CNV_SOL"};
+
+    auto checkRestartOutput = [&](const Opm::data::Solution& sol,
+                                  const int expectedConvCount,
+                                  const int expectedConvNew)
+    {
+        BOOST_CHECK(sol.has("CONV_NEW"));
+        BOOST_CHECK_EQUAL(sol.data<int>("CONV_NEW").size(), cc.size() * 10);
+
+        for (const auto& count : sol.data<int>("CONV_NEW")) {
+            BOOST_CHECK_EQUAL(count, expectedConvNew);
+        }
+
+        for (int c = 0; c < 6; ++c) {
+            if (sample.phase[c] == -1) {
+                BOOST_CHECK(!sol.has(convNames[c]));
+                continue;
+            }
+
+            BOOST_CHECK(sol.has(convNames[c]));
+            BOOST_CHECK_EQUAL(sol.data<int>(convNames[c]).size(), cc.size() * 10);
+
+            for (int i = 0; i < cc.size() * 10; ++i) {
+                const bool inMax = std::ranges::find(max[c], i) != max[c].end();
+                BOOST_CHECK_EQUAL(sol.data<int>(convNames[c])[i], inMax ? expectedConvCount : 0);
+            }
+        }
+    };
+
     cnv.update(residual);
     cnv.update(residual);
 
@@ -175,6 +206,8 @@ BOOST_AUTO_TEST_CASE(RstConvTest)
     }
 
     {
+        cnv.prepareConv();
+
         const std::vector<int> conv_new(10, 0);
         cnv.updateNewton(conv_new);
 
@@ -187,6 +220,23 @@ BOOST_AUTO_TEST_CASE(RstConvTest)
             for (const auto& count : cnv.getConvNew()) {
                 BOOST_CHECK_EQUAL(count, 2);
             }
+
+            Opm::data::Solution restart;
+            cnv.outputRestart(restart);
+            checkRestartOutput(restart, 2, 2);
+
+            BOOST_CHECK_EQUAL(cnv.getConvNew().size(), 10*cc.size());
+        }
+
+        cnv.init(10*cc.size(), rst, sample.phase);
+        cnv.update(residual);
+        cnv.prepareConv();
+        cnv.updateNewton(conv_new);
+
+        if (cc.rank() == 0) {
+            Opm::data::Solution restart;
+            cnv.outputRestart(restart);
+            checkRestartOutput(restart, 3, 3);
         }
     }
 
