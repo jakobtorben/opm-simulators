@@ -289,9 +289,10 @@ testRestriction(int pressureVarIndex)
     auto& gpuCoarseRhs = gpuPolicy.getCoarseLevelRhs();
 
     // Check that restriction results match
+    // Note: coarse level is scalar (block size 1), so always use index 0
     std::vector<double> gpuCoarseData = gpuCoarseRhs.asStdVector();
     for (size_t i = 0; i < fixture.N; ++i) {
-        BOOST_CHECK_CLOSE(cpuCoarseRhs[i][pressureVarIndex], gpuCoarseData[i], 1e-10);
+        BOOST_CHECK_CLOSE(cpuCoarseRhs[i][0], gpuCoarseData[i], 1e-10);
     }
 }
 
@@ -345,8 +346,9 @@ testProlongation(int pressureVarIndex)
     // Set some values in the coarse lhs for prolongation test
     auto& cpuCoarseLhs = cpuPolicy.getCoarseLevelLhs();
     auto& gpuCoarseLhs = gpuPolicy.getCoarseLevelLhs();
+    // Note: coarse level is scalar (block size 1), so always use index 0
     for (int i = 0; i < fixture.N; ++i) {
-        cpuCoarseLhs[i][pressureVarIndex] = fixture.distribution(fixture.generator);
+        cpuCoarseLhs[i][0] = fixture.distribution(fixture.generator);
     }
 
     // Copy coarse lhs to GPU
