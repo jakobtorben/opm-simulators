@@ -432,7 +432,8 @@ distributeGrid(const Dune::EdgeWeightMethod                          edgeWeights
         parallelWells = std::get<1>
             (this->grid_->loadBalance(handle, parts, &wells,
                                       possibleFutureConnections, ownersFirst,
-                                      addCornerCells, overlapLayers));
+                                      addCornerCells, overlapLayers,
+                                      enableDistributedWells));
     }
     else {
         parallelWells = std::get<1>
