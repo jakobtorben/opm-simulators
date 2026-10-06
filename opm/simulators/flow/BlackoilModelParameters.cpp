@@ -105,6 +105,8 @@ BlackoilModelParameters<Scalar>::BlackoilModelParameters()
     newton_min_iter_ = Parameters::Get<Parameters::NewtonMinIterations>();
     nldd_num_initial_newton_iter_ = Parameters::Get<Parameters::NlddNumInitialNewtonIter>();
     nldd_relative_mobility_change_tol_ = Parameters::Get<Parameters::NlddRelativeMobilityChangeTol<Scalar>>();
+    nldd_num_overlap_layers_ = Parameters::Get<Parameters::NlddNumOverlapLayers>();
+    nldd_gs_overlap_writeback_ = gaussSeidelOverlapWritebackFromString(Parameters::Get<Parameters::NlddGaussSeidelOverlapWriteback>());
     num_local_domains_ = Parameters::Get<Parameters::NumLocalDomains>();
     local_domains_partition_imbalance_ = std::max(Scalar{1.0}, Parameters::Get<Parameters::LocalDomainsPartitioningImbalance<Scalar>>());
     local_domains_partition_method_ = Parameters::Get<Parameters::LocalDomainsPartitioningMethod>();
@@ -293,6 +295,15 @@ void BlackoilModelParameters<Scalar>::registerParameters()
         ("Number of initial global Newton iterations when running the NLDD nonlinear solver.");
     Parameters::Register<Parameters::NlddRelativeMobilityChangeTol<Scalar>>
         ("Threshold for single cell relative mobility change in the NLDD solver");
+    Parameters::Register<Parameters::NlddNumOverlapLayers>
+        ("Number of layers of overlap cells added around each NLDD subdomain. "
+         "Overlap cells are solved for in the local problem, but are owned by "
+         "another subdomain. Overlap is not extended across MPI ranks.");
+    Parameters::Register<Parameters::NlddGaussSeidelOverlapWriteback>
+        ("What a Gauss-Seidel sweep keeps of the overlap cells after a converged "
+         "local solve. Allowed values are 'unrestricted' (keep the updated values, "
+         "so subdomains solved later in the sweep start from them) and "
+         "'restricted' (restore the values from before the local solve).");
     Parameters::Register<Parameters::NumLocalDomains>
         ("Number of local domains for NLDD nonlinear solver.");
     Parameters::Register<Parameters::LocalDomainsPartitioningImbalance<Scalar>>
