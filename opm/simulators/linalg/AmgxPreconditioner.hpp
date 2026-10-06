@@ -63,8 +63,10 @@ struct AmgxConfig {
         print_solve_stats = prm.get<int>("print_solve_stats", print_solve_stats);
         solver = prm.get<std::string>("solver", solver);
         algorithm = prm.get<std::string>("algorithm", algorithm);
+        // Default selector depends on algorithm: PMIS is for CLASSICAL, SIZE_2 for AGGREGATION
+        const std::string default_selector = (algorithm == "AGGREGATION") ? "SIZE_2" : "PMIS";
         interpolator = prm.get<std::string>("interpolator", interpolator);
-        selector = prm.get<std::string>("selector", selector);
+        selector = prm.get<std::string>("selector", default_selector);
         smoother = prm.get<std::string>("smoother", smoother);
         presweeps = prm.get<int>("presweeps", presweeps);
         postsweeps = prm.get<int>("postsweeps", postsweeps);
