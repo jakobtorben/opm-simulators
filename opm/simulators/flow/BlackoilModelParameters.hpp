@@ -166,6 +166,7 @@ struct LocalToleranceScalingCnv { static constexpr Scalar value = 0.1; };
 struct NlddNumInitialNewtonIter { static constexpr int value = 1; };
 template<class Scalar>
 struct NlddRelativeMobilityChangeTol { static constexpr Scalar value = 0.1; };
+struct NlddAcceptNonconvergedLocalSolutions { static constexpr bool value = false; };
 struct NlddNumOverlapLayers { static constexpr int value = 0; };
 struct NlddNumOuterSweeps { static constexpr int value = 1; };
 struct NlddUpdateWellControlsBetweenSweepStages { static constexpr bool value = false; };
@@ -378,6 +379,8 @@ public:
     int nldd_num_initial_newton_iter_{1};
     /// Threshold for single cell relative mobility change in NLDD
     Scalar nldd_relative_mobility_change_tol_;
+    /// Whether NLDD may accept a local domain solve that did not meet its formal local convergence criteria.
+    bool nldd_accept_nonconverged_local_solutions_{false};
     /// Number of overlap cell layers for NLDD domain solves (0 = no overlap)
     int nldd_num_overlap_layers_{0};
     /// Number of outer sweeps over all domains per NLDD iteration

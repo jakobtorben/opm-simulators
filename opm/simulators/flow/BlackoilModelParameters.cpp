@@ -103,6 +103,7 @@ BlackoilModelParameters<Scalar>::BlackoilModelParameters()
     newton_min_iter_ = Parameters::Get<Parameters::NewtonMinIterations>();
     nldd_num_initial_newton_iter_ = Parameters::Get<Parameters::NlddNumInitialNewtonIter>();
     nldd_relative_mobility_change_tol_ = Parameters::Get<Parameters::NlddRelativeMobilityChangeTol<Scalar>>();
+    nldd_accept_nonconverged_local_solutions_ = Parameters::Get<Parameters::NlddAcceptNonconvergedLocalSolutions>();
     nldd_num_overlap_layers_ = Parameters::Get<Parameters::NlddNumOverlapLayers>();
     nldd_num_outer_sweeps_ = Parameters::Get<Parameters::NlddNumOuterSweeps>();
     nldd_update_well_controls_between_sweep_stages_ = Parameters::Get<Parameters::NlddUpdateWellControlsBetweenSweepStages>();
@@ -286,6 +287,8 @@ void BlackoilModelParameters<Scalar>::registerParameters()
         ("Number of initial global Newton iterations when running the NLDD nonlinear solver.");
     Parameters::Register<Parameters::NlddRelativeMobilityChangeTol<Scalar>>
         ("Threshold for single cell relative mobility change in the NLDD solver");
+    Parameters::Register<Parameters::NlddAcceptNonconvergedLocalSolutions>
+        ("Whether NLDD may accept local domain solutions that fail their formal local convergence criteria but remain below the built-in MB/CNV acceptance thresholds.");
     Parameters::Register<Parameters::NlddNumOverlapLayers>
         ("Number of overlap cell layers for NLDD domain solves (0 = no overlap).");
     Parameters::Register<Parameters::NlddNumOuterSweeps>

@@ -1186,7 +1186,9 @@ private:
                 // If not too high, we overrule the convergence failure.
                 const Scalar acceptable_local_mb_sum = 1e-3;
                 const Scalar acceptable_local_cnv_sum = 1.0;
-                if (mb_sum < acceptable_local_mb_sum && cnv_sum < acceptable_local_cnv_sum) {
+                if (model_.param().nldd_accept_nonconverged_local_solutions_
+                    && mb_sum < acceptable_local_mb_sum
+                    && cnv_sum < acceptable_local_cnv_sum) {
                     local_report.converged = true;
                     local_report.accepted_unconverged_domains += 1;
                     logger.debug(fmt::format("Accepting solution in unconverged domain {} on rank {}.", domain.index, rank_));
