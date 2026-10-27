@@ -190,9 +190,15 @@ struct LocalDomainsPartitionWellNeighborLevels { static constexpr int value = 1;
 struct LocalDomainsOrderingMeasure { static constexpr auto value = "maxpressure"; };
 
 struct ConvergenceMonitoring { static constexpr bool value = false; };
-struct ConvergenceMonitoringCutOff { static constexpr int value = 6; };
+struct ConvergenceMonitoringDistance { static constexpr auto value = "linear"; };
+struct ConvergenceMonitoringMemory { static constexpr int value = 1; };
+struct ConvergenceMonitoringIterationBuffer { static constexpr int value = 2; };
+struct ConvergenceMonitoringIterationMargin { static constexpr int value = 2; };
 template<class Scalar>
-struct ConvergenceMonitoringDecayFactor { static constexpr Scalar value = 0.75; };
+struct ConvergenceMonitoringThetaFast { static constexpr Scalar value = 0.1; };
+template<class Scalar>
+struct ConvergenceMonitoringThetaSlow { static constexpr Scalar value = 0.9; };
+struct ConvergenceMonitoringViolationsCut { static constexpr int value = 5; };
 
 
 template<class Scalar>
@@ -405,15 +411,33 @@ public:
 
     bool write_partitions_{false};
 
-    /// Struct holding convergence monitor params
+    /// Parameters of the convergence monitor, see BlackoilModelConvergenceMonitor.
     struct ConvergenceMonitorParams
     {
-        /// Whether to enable convergence monitoring
-        bool enabled_;
-        /// Cut-off limit for convergence monitoring
-        int cutoff_;
-        /// Decay factor used in convergence monitoring
-        Scalar decay_factor_;
+        /// Distance from convergence of the largest scaled residual r.
+        enum class Distance {
+            Linear, //!< max(r, 1)
+            Log,    //!< 1 + max(log10(r), 0)
+        };
+
+        /// Whether to cut the time step when the monitor detects slow convergence
+        bool enabled_{false};
+        Distance distance_{Distance::Linear};
+        /// Number of previous iterations used to estimate the contraction factor
+        int memory_{1};
+        /// Target number of nonlinear iterations for a time step, the target of
+        /// the time-step control (--time-step-control-target-newton-iterations)
+        int target_iterations_{8};
+        /// Lower bound on the remaining iterations used for the target contraction factor
+        int iteration_buffer_{2};
+        /// Margin subtracted from the remaining iterations to the target
+        int iteration_margin_{2};
+        /// Iterations with a contraction factor of at most theta_fast_ are good, and
+        /// those above both theta_slow_ and the target contraction factor are bad
+        Scalar theta_fast_{0.1};
+        Scalar theta_slow_{0.9};
+        /// Cut the time step when the number of violations exceeds this limit
+        int violations_cut_{5};
     };
 
     ConvergenceMonitorParams monitor_params_; //!< Convergence monitoring parameters

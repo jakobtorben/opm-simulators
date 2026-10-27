@@ -65,9 +65,12 @@ namespace {
             "CnvCellCntConv"s,
             "CnvCellCntRelax"s,
             "CnvCellCntUnconv"s,
-            "PenaltyNonConv"s,
-            "PenaltyDecay"s,
-            "PenaltyWellRes"s,
+            "WellResScaled"s,
+            "MonDistance"s,
+            "MonTheta"s,
+            "MonThetaTarget"s,
+            "MonStatus"s,
+            "MonViolations"s,
         };
     }
 
@@ -217,15 +220,18 @@ namespace {
         }
     }
 
-    void writePenaltyCount(std::ostream&                 os,
-                           const int                     firstColSize,
-                           const Opm::ConvergenceReport& report)
+    void writeConvergenceMonitor(std::ostream&                 os,
+                                 const int                     firstColSize,
+                                 const Opm::ConvergenceReport& report)
     {
-        const auto& penaltyCard = report.getPenaltyCard();
+        const auto& state = report.convergenceMonitorState();
 
-        os << ' ' << std::setw(firstColSize) << penaltyCard.nonConverged;
-        os << ' ' << std::setw(firstColSize) << penaltyCard.distanceDecay;
-        os << ' ' << std::setw(firstColSize) << penaltyCard.largeWellResiduals;
+        os << ' ' << std::setprecision(4) << std::setw(firstColSize) << report.scaledWellResidual().value;
+        os << ' ' << std::setprecision(4) << std::setw(firstColSize) << state.distance;
+        os << ' ' << std::setprecision(4) << std::setw(firstColSize) << state.theta;
+        os << ' ' << std::setprecision(4) << std::setw(firstColSize) << state.thetaTarget;
+        os << ' ' << std::setw(firstColSize) << state.status;
+        os << ' ' << std::setw(firstColSize) << state.numViolations;
     }
 
     void writeReservoirConvergence(std::ostream&                 os,
@@ -307,7 +313,7 @@ namespace {
 
             writeCnvPvSplit(os, expectNumCnvSplit, firstColSize, report);
 
-            writePenaltyCount(os, firstColSize, report);
+            writeConvergenceMonitor(os, firstColSize, report);
 
             writeReservoirConvergence(os, colSize, report);
             writeCnvRelaxation(os, colSize, report);

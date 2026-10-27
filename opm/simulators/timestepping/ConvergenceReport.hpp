@@ -54,38 +54,6 @@ namespace Opm
             NotANumber = 4,
         };
 
-        struct PenaltyCard {
-            int nonConverged{0};
-            int distanceDecay{0};
-            int largeWellResiduals{0};
-
-            int total() const {
-                return nonConverged + distanceDecay + largeWellResiduals;
-            }
-
-            void reset()
-            {
-                nonConverged = 0;
-                distanceDecay = 0;
-                largeWellResiduals = 0;
-            }
-
-            PenaltyCard& operator+=(const PenaltyCard& other) {
-                nonConverged += other.nonConverged;
-                distanceDecay += other.distanceDecay;
-                largeWellResiduals += other.largeWellResiduals;
-                return *this;
-            }
-
-            template <typename Serializer>
-            void serializeOp(Serializer& serializer)
-            {
-                serializer(nonConverged);
-                serializer(distanceDecay);
-                serializer(largeWellResiduals);
-            }
-        };
-
         using CnvPvSplit = std::pair<
             std::vector<double>,
             std::vector<int>>;
@@ -240,6 +208,70 @@ namespace Opm
             std::string well_name_ {};
         };
 
+        /// Largest reservoir residual measure scaled by its strict
+        /// tolerance, so that a value of one or less means converged.
+        struct ScaledReservoirResidual
+        {
+            double value { 0.0 };
+            ReservoirFailure::Type type { ReservoirFailure::Type::Invalid };
+            int phase { -1 };
+
+            template <typename Serializer>
+            void serializeOp(Serializer& serializer)
+            {
+                serializer(value);
+                serializer(type);
+                serializer(phase);
+            }
+        };
+
+        /// Largest well residual measure scaled by its strict tolerance,
+        /// so that a value of one or less means converged.
+        struct ScaledWellResidual
+        {
+            double value { 0.0 };
+            WellFailure::Type type { WellFailure::Type::Invalid };
+            std::string wellName {};
+
+            template <typename Serializer>
+            void serializeOp(Serializer& serializer)
+            {
+                serializer(value);
+                serializer(type);
+                serializer(wellName);
+            }
+        };
+
+        /// State of the convergence monitor after a nonlinear iteration.
+        struct ConvergenceMonitorState
+        {
+            /// Distance from convergence, one or less means converged.
+            double distance { 0.0 };
+            /// Estimated contraction factor of the distance (zero in the
+            /// first iteration, which has no estimate).
+            double theta { 0.0 };
+            /// Contraction factor needed to converge within the target
+            /// number of iterations (zero in the first iteration).
+            double thetaTarget { 0.0 };
+            bool oscillating { false };
+            /// Classification of the iteration: 1 good, 0 ok, -1 bad.
+            int status { 0 };
+            /// Number of violations, increased for bad and decreased for
+            /// good iterations.
+            int numViolations { 0 };
+
+            template <typename Serializer>
+            void serializeOp(Serializer& serializer)
+            {
+                serializer(distance);
+                serializer(theta);
+                serializer(thetaTarget);
+                serializer(oscillating);
+                serializer(status);
+                serializer(numViolations);
+            }
+        };
+
         /// Which condition, if any, granted the relaxed CNV tolerance this iteration.
         /// Ordered by precedence in the code so a single value can be reported even
         /// though several conditions may hold at once.
@@ -328,6 +360,34 @@ namespace Opm
             this->eligiblePoreVolume_ = eligiblePoreVolume;
         }
 
+        //! \brief Record a reservoir residual scaled by its strict tolerance,
+        //! keeping the largest one (NaN values, which fail the convergence
+        //! check, are ignored).
+        void setScaledReservoirResidual(const double value,
+                                        const ReservoirFailure::Type type,
+                                        const int phase)
+        {
+            if (value > this->scaledReservoirResidual_.value) {
+                this->scaledReservoirResidual_ = {value, type, phase};
+            }
+        }
+
+        //! \brief Record a well residual scaled by its strict tolerance,
+        //! keeping the largest one (NaN values are ignored).
+        void setScaledWellResidual(const double value,
+                                   const WellFailure::Type type,
+                                   const std::string& wellName)
+        {
+            if (value > this->scaledWellResidual_.value) {
+                this->scaledWellResidual_ = {value, type, wellName};
+            }
+        }
+
+        void setConvergenceMonitorState(const ConvergenceMonitorState& state)
+        {
+            this->convergenceMonitorState_ = state;
+        }
+
         //! \brief Record that the Newton solver damped this iteration for oscillation,
         //! together with what was unsatisfied at that point.
         void setOscillationSource(const OscillationSource source)
@@ -374,6 +434,21 @@ namespace Opm
             if (other.cnvToleranceApplied_ > 0.0) {
                 this->cnvRelaxSource_ = other.cnvRelaxSource_;
                 this->cnvToleranceApplied_ = other.cnvToleranceApplied_;
+            }
+
+            // The scaled residuals are maxima over all equations, wells
+            // and ranks.
+            this->setScaledReservoirResidual(other.scaledReservoirResidual_.value,
+                                             other.scaledReservoirResidual_.type,
+                                             other.scaledReservoirResidual_.phase);
+            this->setScaledWellResidual(other.scaledWellResidual_.value,
+                                        other.scaledWellResidual_.type,
+                                        other.scaledWellResidual_.wellName);
+
+            // Only the combined report gets a monitor state, see
+            // NonlinearSystemBlackOilReservoir::getConvergence().
+            if (other.convergenceMonitorState_.distance > 0.0) {
+                this->convergenceMonitorState_ = other.convergenceMonitorState_;
             }
 
             return *this;
@@ -466,24 +541,27 @@ namespace Opm
             return well_convergence_;
         }
 
-        const PenaltyCard& getPenaltyCard() const
+        const ScaledReservoirResidual& scaledReservoirResidual() const
         {
-            return penaltyCard_;
+            return this->scaledReservoirResidual_;
         }
 
-        void addNonConvergedPenalty()
+        const ScaledWellResidual& scaledWellResidual() const
         {
-            penaltyCard_.nonConverged++;
+            return this->scaledWellResidual_;
         }
 
-        void addDistanceDecayPenalty()
+        //! \brief Largest residual measure over the reservoir and the wells,
+        //! scaled by its strict tolerance.
+        double maxScaledResidual() const
         {
-            penaltyCard_.distanceDecay++;
+            return std::max(this->scaledReservoirResidual_.value,
+                            this->scaledWellResidual_.value);
         }
 
-        void addLargeWellResidualsPenalty()
+        const ConvergenceMonitorState& convergenceMonitorState() const
         {
-            penaltyCard_.largeWellResiduals++;
+            return this->convergenceMonitorState_;
         }
 
         Severity severityOfWorstFailure() const
@@ -518,7 +596,9 @@ namespace Opm
             serializer(this->cnvRelaxSource_);
             serializer(this->cnvToleranceApplied_);
             serializer(this->oscillationSource_);
-            serializer(this->penaltyCard_);
+            serializer(this->scaledReservoirResidual_);
+            serializer(this->scaledWellResidual_);
+            serializer(this->convergenceMonitorState_);
         }
 
     private:
@@ -538,7 +618,9 @@ namespace Opm
         CnvRelaxSource cnvRelaxSource_{CnvRelaxSource::None};
         double cnvToleranceApplied_{};
         OscillationSource oscillationSource_{OscillationSource::NotDetected};
-        PenaltyCard penaltyCard_;
+        ScaledReservoirResidual scaledReservoirResidual_{};
+        ScaledWellResidual scaledWellResidual_{};
+        ConvergenceMonitorState convergenceMonitorState_{};
     };
 
     struct StepReport
@@ -556,7 +638,6 @@ namespace Opm
 
     std::string to_string(const ConvergenceReport::WellFailure& wf);
 
-    std::string to_string(const ConvergenceReport::PenaltyCard& pc);
 
     std::string to_string(const ConvergenceReport::CnvRelaxSource s);
 

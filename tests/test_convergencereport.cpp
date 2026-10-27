@@ -126,3 +126,39 @@ BOOST_AUTO_TEST_CASE(Failures)
         BOOST_CHECK(s1.severityOfWorstFailure() == CR::Severity::TooLarge);
     }
 }
+
+BOOST_AUTO_TEST_CASE(ScaledResiduals)
+{
+    CR s1;
+    BOOST_CHECK_EQUAL(s1.maxScaledResidual(), 0.0);
+
+    s1.setScaledReservoirResidual(10.0, CR::ReservoirFailure::Type::Cnv, 1);
+    s1.setScaledReservoirResidual(2.0, CR::ReservoirFailure::Type::MassBalance, 0);
+    BOOST_CHECK_EQUAL(s1.scaledReservoirResidual().value, 10.0);
+    BOOST_CHECK(s1.scaledReservoirResidual().type == CR::ReservoirFailure::Type::Cnv);
+    BOOST_CHECK_EQUAL(s1.scaledReservoirResidual().phase, 1);
+
+    CR s2;
+    s2.setScaledWellResidual(5.0, CR::WellFailure::Type::MassBalance, "PROD1");
+    s2.setScaledWellResidual(20.0, CR::WellFailure::Type::ControlBHP, "PROD2");
+    s2.setScaledWellResidual(1.0, CR::WellFailure::Type::ControlRate, "INJ1");
+    BOOST_CHECK_EQUAL(s2.scaledWellResidual().value, 20.0);
+    BOOST_CHECK_EQUAL(s2.scaledWellResidual().wellName, "PROD2");
+    BOOST_CHECK_EQUAL(s2.maxScaledResidual(), 20.0);
+
+    // Combined reports keep the largest values.
+    s1 += s2;
+    BOOST_CHECK_EQUAL(s1.scaledReservoirResidual().value, 10.0);
+    BOOST_CHECK_EQUAL(s1.scaledWellResidual().value, 20.0);
+    BOOST_CHECK(s1.scaledWellResidual().type == CR::WellFailure::Type::ControlBHP);
+    BOOST_CHECK_EQUAL(s1.maxScaledResidual(), 20.0);
+
+    // The monitor state is only carried by the report that has one.
+    CR s3;
+    s3.setConvergenceMonitorState({3.0, 0.5, 0.25, false, -1, 2});
+    s1 += s3;
+    BOOST_CHECK_EQUAL(s1.convergenceMonitorState().distance, 3.0);
+    BOOST_CHECK_EQUAL(s1.convergenceMonitorState().numViolations, 2);
+    s1 += s2;
+    BOOST_CHECK_EQUAL(s1.convergenceMonitorState().status, -1);
+}

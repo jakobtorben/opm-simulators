@@ -22,6 +22,8 @@
 
 #include <opm/simulators/linalg/FlowLinearSolverParameters.hpp>
 
+#include <opm/simulators/timestepping/AdaptiveTimeStepping.hpp>
+
 #include <opm/models/discretization/common/fvbaseparameters.hh>
 
 #include <opm/models/nonlinear/newtonmethodparams.hpp>
@@ -121,8 +123,33 @@ BlackoilModelParameters<Scalar>::BlackoilModelParameters()
     write_partitions_ = Parameters::Get<Parameters::DebugEmitCellPartition>();
 
     monitor_params_.enabled_ = Parameters::Get<Parameters::ConvergenceMonitoring>();
-    monitor_params_.cutoff_ = Parameters::Get<Parameters::ConvergenceMonitoringCutOff>();
-    monitor_params_.decay_factor_ = Parameters::Get<Parameters::ConvergenceMonitoringDecayFactor<Scalar>>();
+    const auto monitor_distance = Parameters::Get<Parameters::ConvergenceMonitoringDistance>();
+    if (monitor_distance == "linear") {
+        monitor_params_.distance_ = ConvergenceMonitorParams::Distance::Linear;
+    } else if (monitor_distance == "log") {
+        monitor_params_.distance_ = ConvergenceMonitorParams::Distance::Log;
+    } else {
+        throw std::invalid_argument("Unknown convergence monitoring distance '" + monitor_distance +
+                                    "', allowed values are 'linear' and 'log'");
+    }
+    monitor_params_.memory_ = Parameters::Get<Parameters::ConvergenceMonitoringMemory>();
+    monitor_params_.target_iterations_ = Parameters::Get<Parameters::TimeStepControlTargetNewtonIterations>();
+    monitor_params_.iteration_buffer_ = Parameters::Get<Parameters::ConvergenceMonitoringIterationBuffer>();
+    monitor_params_.iteration_margin_ = Parameters::Get<Parameters::ConvergenceMonitoringIterationMargin>();
+    monitor_params_.theta_fast_ = Parameters::Get<Parameters::ConvergenceMonitoringThetaFast<Scalar>>();
+    monitor_params_.theta_slow_ = Parameters::Get<Parameters::ConvergenceMonitoringThetaSlow<Scalar>>();
+    monitor_params_.violations_cut_ = Parameters::Get<Parameters::ConvergenceMonitoringViolationsCut>();
+    if (monitor_params_.memory_ < 1 || monitor_params_.iteration_buffer_ < 1) {
+        throw std::invalid_argument("The convergence monitoring memory and iteration buffer must be at least one");
+    }
+    if (!(0 < monitor_params_.theta_fast_ && monitor_params_.theta_fast_ <= monitor_params_.theta_slow_ &&
+          monitor_params_.theta_slow_ < 1)) {
+        throw std::invalid_argument("The convergence monitoring contraction factors must satisfy "
+                                    "0 < theta-fast <= theta-slow < 1");
+    }
+    if (monitor_params_.violations_cut_ < 0) {
+        throw std::invalid_argument("The convergence monitoring violations cut must be non-negative");
+    }
 
     nupcol_group_rate_tolerance_ = Parameters::Get<Parameters::NupcolGroupRateTolerance<Scalar>>();
     well_group_constraints_max_iterations_ = Parameters::Get<Parameters::WellGroupConstraintsMaxIterations>();
@@ -318,11 +345,30 @@ void BlackoilModelParameters<Scalar>::registerParameters()
         ("Whether or not to emit cell partitions as a debugging aid.");
 
     Parameters::Register<Parameters::ConvergenceMonitoring>
-        ("Enable convergence monitoring");
-    Parameters::Register<Parameters::ConvergenceMonitoringCutOff>
-        ("Cut off limit for convergence monitoring");
-    Parameters::Register<Parameters::ConvergenceMonitoringDecayFactor<Scalar>>
-        ("Decay factor for convergence monitoring");
+        ("Cut the time step early when the convergence monitor detects that "
+         "the nonlinear iterations converge too slowly");
+    Parameters::Register<Parameters::ConvergenceMonitoringDistance>
+        ("Distance from convergence used by the convergence monitor, computed from the "
+         "largest residual scaled by its strict tolerance r. Allowed values are "
+         "'linear' (max(r, 1)) and 'log' (1 + max(log10(r), 0))");
+    Parameters::Register<Parameters::ConvergenceMonitoringMemory>
+        ("Number of previous iterations used to estimate the contraction factor "
+         "in the convergence monitor");
+    Parameters::Register<Parameters::ConvergenceMonitoringIterationBuffer>
+        ("Lower bound on the number of remaining iterations used for the target "
+         "contraction factor in the convergence monitor");
+    Parameters::Register<Parameters::ConvergenceMonitoringIterationMargin>
+        ("Margin subtracted from the number of remaining iterations to the target "
+         "in the convergence monitor");
+    Parameters::Register<Parameters::ConvergenceMonitoringThetaFast<Scalar>>
+        ("Iterations with an estimated contraction factor of at most this value "
+         "are good in the convergence monitor, unless they oscillate");
+    Parameters::Register<Parameters::ConvergenceMonitoringThetaSlow<Scalar>>
+        ("Iterations with an estimated contraction factor above this value and "
+         "above the target contraction factor are bad in the convergence monitor");
+    Parameters::Register<Parameters::ConvergenceMonitoringViolationsCut>
+        ("Number of violations (bad iterations minus good iterations) the "
+         "convergence monitor allows before cutting the time step");
 
     Parameters::Register<Parameters::NupcolGroupRateTolerance<Scalar>>
         ("Tolerance for acceptable changes in VREP/RAIN group rates");

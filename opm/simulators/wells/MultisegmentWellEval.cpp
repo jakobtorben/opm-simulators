@@ -192,6 +192,8 @@ getWellConvergence(const WellState<Scalar, IndexTraits>& well_state,
         if (eq_idx < baseif_.numConservationQuantities()) { // phase or component mass equations
             const Scalar flux_residual = maximum_residual[eq_idx];
             // TODO: the report can not handle the segment number yet.
+            report.setScaledWellResidual(flux_residual / tolerance_wells,
+                                         CR::WellFailure::Type::MassBalance, baseif_.name());
 
             if (std::isnan(flux_residual)) {
                 report.setWellFailed({CR::WellFailure::Type::MassBalance, CR::Severity::NotANumber, eq_idx, baseif_.name()});
@@ -208,6 +210,8 @@ getWellConvergence(const WellState<Scalar, IndexTraits>& well_state,
             constexpr int dummy_phase = -1;
             // The energy residual is scaled (energy_scaling_factor_) onto the
             // mass-balance scale, so we reuse the mass-balance well tolerances.
+            report.setScaledWellResidual(energy_residual / tolerance_wells,
+                                         CR::WellFailure::Type::Energy, baseif_.name());
             if (std::isnan(energy_residual)) {
                 report.setWellFailed({CR::WellFailure::Type::Energy, CR::Severity::NotANumber, dummy_phase, baseif_.name()});
             } else if (energy_residual > max_residual_allowed) {
@@ -220,6 +224,8 @@ getWellConvergence(const WellState<Scalar, IndexTraits>& well_state,
         } else if (eq_idx == SPres) { // pressure equation
             const Scalar pressure_residual = maximum_residual[eq_idx];
             const int dummy_component = -1;
+            report.setScaledWellResidual(pressure_residual / tolerance_pressure_ms_wells,
+                                         CR::WellFailure::Type::Pressure, baseif_.name());
             if (std::isnan(pressure_residual)) {
                 report.setWellFailed({CR::WellFailure::Type::Pressure, CR::Severity::NotANumber, dummy_component, baseif_.name()});
             } else if (std::isinf(pressure_residual)) {

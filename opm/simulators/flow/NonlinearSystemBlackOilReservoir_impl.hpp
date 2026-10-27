@@ -199,8 +199,9 @@ initialLinearization(SimulatorReportSingle& report,
             this->failureReport_ += report;
             OPM_THROW_PROBLEM(ConvergenceMonitorFailure,
                               fmt::format(
-                                  "Total penalty count exceeded cut-off-limit of {}",
-                                  this->param_.monitor_params_.cutoff_
+                                  "Convergence monitor: {} violations exceeded the limit of {}",
+                                  this->conv_monitor_.state().numViolations,
+                                  this->param_.monitor_params_.violations_cut_
                               ));
         }
     }
@@ -882,9 +883,17 @@ getReservoirConvergence(const double reportTime,
         };
 
         Scalar tol[2] = { tol_mb, tol_cnv, };
+        // The convergence monitor always measures the distance from
+        // convergence with the strict tolerances.
+        Scalar strict_tol[2] = { this->param_.tolerance_mb_, this->param_.tolerance_cnv_, };
         if (has_energy_ && compIdx == contiEnergyEqIdx) {
             tol[0] = tol_eb;
             tol[1] = tol_cnv_energy;
+            strict_tol[0] = this->param_.tolerance_energy_balance_;
+            strict_tol[1] = this->param_.tolerance_cnv_energy_;
+        }
+        for (int i = 0; i < 2; ++i) {
+            report.setScaledReservoirResidual(res[i] / strict_tol[i], types[i], compIdx);
         }
 
         this->addReservoirConvergenceMetrics(
@@ -1055,9 +1064,48 @@ getConvergence(const SimulatorTimerInterface& timer,
                                                        /*checkWellGroupControlsAndNetwork*/report.converged());
     }
 
-    conv_monitor_.checkPenaltyCard(report, this->simulator_.problem().iterationContext().iteration());
+    this->updateConvergenceMonitor(report);
 
     return report;
+}
+
+template <class TypeTag>
+void
+NonlinearSystemBlackOilReservoir<TypeTag>::
+updateConvergenceMonitor(ConvergenceReport& report)
+{
+    const int iteration = this->simulator_.problem().iterationContext().iteration();
+    const auto& state = this->conv_monitor_.update(report.maxScaledResidual(), iteration);
+    report.setConvergenceMonitorState(state);
+
+    const auto& param = this->conv_monitor_.param();
+    if (!param.enabled_) {
+        return;
+    }
+
+    if (this->terminal_output_) {
+        // Measure with the largest scaled residual.
+        const auto& res = report.scaledReservoirResidual();
+        const auto& well = report.scaledWellResidual();
+        const auto measure = (res.value >= well.value)
+            ? fmt::format("{} {}", to_string(res.type),
+                          res.phase >= 0 ? this->compNames_.name(res.phase) : std::string{})
+            : fmt::format("well {} {}", well.wellName, to_string(well.type));
+        const auto status = state.status > 0 ? "good" : (state.status < 0 ? "bad" : "ok");
+        OpmLog::debug(fmt::format("Convergence monitor: iteration {}, distance {:.3e} ({}), "
+                                  "contraction {:.3f}, target {:.3f}, {}{}, violations {}",
+                                  iteration, state.distance, measure,
+                                  state.theta, state.thetaTarget, status,
+                                  state.oscillating ? " (oscillating)" : "",
+                                  state.numViolations));
+    }
+
+    if (this->conv_monitor_.shouldCut() && !report.converged()) {
+        report.setReservoirFailed(
+            {ConvergenceReport::ReservoirFailure::Type::ConvergenceMonitorFailure,
+             ConvergenceReport::Severity::ConvergenceMonitorFailure,
+             -1}); // -1 indicates it's not specific to any component
+    }
 }
 
 template <class TypeTag>

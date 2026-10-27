@@ -490,6 +490,7 @@ list (APPEND TEST_SOURCE_FILES
   tests/test_compwell_equations.cpp
   tests/test_compwell_jacobian.cpp
   tests/test_convergenceoutputconfiguration.cpp
+  tests/test_convergencemonitor.cpp
   tests/test_convergencereport.cpp
   tests/test_deferredlogger.cpp
   tests/test_dilu.cpp

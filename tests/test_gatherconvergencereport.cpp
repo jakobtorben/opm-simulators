@@ -106,6 +106,21 @@ BOOST_AUTO_TEST_CASE(EvenHaveFailure)
     }
 }
 
+BOOST_AUTO_TEST_CASE(MaxScaledWellResidual)
+{
+    auto cc = Dune::MPIHelper::getCommunication();
+    using CR = Opm::ConvergenceReport;
+    CR cr;
+    std::ostringstream name;
+    name << "WellRank" << cc.rank() << std::flush;
+    cr.setScaledWellResidual(1.0 + cc.rank(), CR::WellFailure::Type::MassBalance, name.str());
+    const CR global_cr = gatherConvergenceReport(cr, cc);
+    std::ostringstream lastName;
+    lastName << "WellRank" << cc.size() - 1 << std::flush;
+    BOOST_CHECK_EQUAL(global_cr.scaledWellResidual().value, static_cast<double>(cc.size()));
+    BOOST_CHECK_EQUAL(global_cr.scaledWellResidual().wellName, lastName.str());
+}
+
 namespace {
 
     class NProc_Is_Not

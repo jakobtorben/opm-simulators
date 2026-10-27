@@ -4,6 +4,7 @@
   Copyright 2014, 2015 Statoil ASA.
   Copyright 2015 NTNU
   Copyright 2015, 2016, 2017 IRIS AS
+  Copyright 2026 SINTEF AS.
 
   This file is part of the Open Porous Media project (OPM).
 
@@ -27,25 +28,59 @@
 #include <opm/simulators/flow/BlackoilModelParameters.hpp>
 #include <opm/simulators/timestepping/ConvergenceReport.hpp>
 
+#include <vector>
+
 namespace Opm {
 
-/// Implementation of penalty cards for three-phase black oil.
+/// Convergence monitor based on contraction factors.
+///
+/// The monitor follows the distance from convergence D of the nonlinear
+/// iterations of a time step.  The residual measures of the reservoir (MB
+/// and CNV per component) and of the wells are scaled by their strict
+/// tolerances and pooled into one distance by their maximum (D <= 1 means
+/// converged).  Assuming that the distances form a geometric series, the
+/// monitor estimates the contraction factor theta from the latest
+/// iterations and compares it with the contraction factor needed to
+/// converge within the target number of iterations.  Each iteration is
+/// classified as good, ok or bad, and the number of violations is
+/// increased for bad and decreased for good iterations.  The time step
+/// should be cut when the number of violations exceeds the limit.
 template <class Scalar>
 class BlackoilModelConvergenceMonitor
 {
 public:
     using MonitorParams = typename BlackoilModelParameters<Scalar>::ConvergenceMonitorParams;
+    using State = ConvergenceReport::ConvergenceMonitorState;
+
     explicit BlackoilModelConvergenceMonitor(const MonitorParams& param);
 
-    void checkPenaltyCard(ConvergenceReport& report, int iteration);
+    /// Analyse a new nonlinear iteration of the current time step.
+    ///
+    /// \param[in] scaledResidual Largest residual measure scaled by its
+    ///   strict tolerance.
+    /// \param[in] iteration Zero-based iteration number.  Iteration zero
+    ///   starts a new time step.
+    /// \return Monitor state after this iteration.
+    const State& update(double scaledResidual, int iteration);
+
+    /// Whether the number of violations exceeds the limit.
+    bool shouldCut() const
+    { return state_.numViolations > param_.violations_cut_; }
+
+    const State& state() const
+    { return state_; }
+
+    const MonitorParams& param() const
+    { return param_; }
 
     void reset();
 
 private:
-    const MonitorParams& param_;
-    ConvergenceReport::PenaltyCard total_penaltyCard_;
-    double prev_distance_;
-    int prev_above_tolerance_;
+    double distance(double scaledResidual) const;
+
+    MonitorParams param_;
+    std::vector<double> distances_{};
+    State state_{};
 };
 
 } // namespace Opm

@@ -243,6 +243,11 @@ public:
                    const int maxIter,
                    std::vector<Scalar>& residual_norms);
 
+    /// Update the convergence monitor with the largest scaled residual of
+    /// \p report, store its state in the report, and mark the report as
+    /// failed if the monitor is enabled and the time step should be cut.
+    void updateConvergenceMonitor(ConvergenceReport& report);
+
     /// Wrapper required due to not following generic API
     template<class T>
     std::vector<std::vector<Scalar> >
